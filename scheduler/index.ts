@@ -1,26 +1,24 @@
-type SchedulerEnv = { WORKBOARD_URL: string; SCHEDULER_TOKEN: string };
-async function run(env: SchedulerEnv) {
-  const headers = {
-    Authorization: "Bearer " + env.SCHEDULER_TOKEN,
-    "Content-Type": "application/json",
-  };
-  for (let i = 0; i < 20; i++) {
-    const r = await fetch(new URL("/api/internal/harness", env.WORKBOARD_URL), {
+type SchedulerEnv = {
+  WORKBOARD_URL: string;
+  SCHEDULER_TOKEN: string;
+  AGENT_QUEUE: Queue<{ type: string }>;
+};
+async function invoke(env: SchedulerEnv, path: string) {
+  const response = await fetch(
+    new URL("/api/internal/" + path, env.WORKBOARD_URL),
+    {
       method: "POST",
-      headers,
+      headers: {
+        Authorization: "Bearer " + env.SCHEDULER_TOKEN,
+        "Content-Type": "application/json",
+      },
       body: "{}",
-    });
-    if (!r.ok) throw Error("Harness HTTP " + r.status);
-    const result = (await r.json()) as { worked: boolean; waiting?: boolean };
-    if (!result.worked) break;
-    if (result.waiting)
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-  }
-  const res = await fetch(
-    new URL("/api/internal/scheduler", env.WORKBOARD_URL),
-    { method: "POST", headers, body: "{}" },
+      signal: AbortSignal.timeout(600000),
+    },
   );
-  if (!res.ok) throw Error("Scheduler HTTP " + res.status);
+  if (!response.ok)
+    throw Error("Workboard " + path + " HTTP " + response.status);
+  return response.json() as Promise<{ worked?: boolean; waiting?: boolean }>;
 }
 export default {
   scheduled(
@@ -28,21 +26,45 @@ export default {
     env: SchedulerEnv,
     ctx: ExecutionContext,
   ) {
-    ctx.waitUntil(run(env));
+    ctx.waitUntil(
+      Promise.all([
+        env.AGENT_QUEUE.send({ type: "harness" }),
+        invoke(env, "scheduler"),
+      ]),
+    );
   },
-  async fetch(request: Request, env: SchedulerEnv, ctx: ExecutionContext) {
+  async queue(batch: MessageBatch<{ type: string }>, env: SchedulerEnv) {
+    for (const message of batch.messages) {
+      try {
+        const result = await invoke(env, "harness");
+        if (result.worked)
+          await env.AGENT_QUEUE.send(
+            { type: "harness" },
+            { delaySeconds: result.waiting ? 10 : 0 },
+          );
+        message.ack();
+      } catch {
+        message.retry({ delaySeconds: 60 });
+      }
+    }
+  },
+  async fetch(request: Request, env: SchedulerEnv) {
     if (new URL(request.url).pathname === "/run") {
       if (
         request.method !== "POST" ||
         request.headers.get("Authorization") !== "Bearer " + env.SCHEDULER_TOKEN
       )
         return new Response("Unauthorized", { status: 401 });
-      ctx.waitUntil(run(env));
-      return Response.json({ accepted: true }, { status: 202 });
+      await env.AGENT_QUEUE.send({ type: "harness" });
+      return Response.json(
+        { accepted: true, transport: "Cloudflare Queues" },
+        { status: 202 },
+      );
     }
     return Response.json({
       service: "blog-agent-workboard-scheduler",
       status: "ok",
+      transport: "Cloudflare Queues",
       agents: ["researcher", "writer", "photo_editor", "verifier", "publisher"],
     });
   },

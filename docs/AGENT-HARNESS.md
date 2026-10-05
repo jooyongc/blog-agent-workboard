@@ -21,3 +21,7 @@ Set strategy.media_mode=hybrid to add Adobe Firefly conceptual imagery; strategy
 ## Existing Adobe web account without Firefly API entitlement
 
 The existing organization's Developer Console shows Firefly API disabled with License required. An OAuth credential with only AdobeID/openid and Event registration does not grant generation permission. Keep API generation inactive until real Firefly API scopes are provisioned. Workspaces offers an authenticated Adobe media upload form; Adobe web-generated images and videos are persisted in workboard-media with generated provenance, topic tags and workspace isolation. Media agents reuse matching entries automatically. Stock uploads require a license reference.
+
+## Durable execution transport
+
+Approvals POST to the scheduler Worker's authenticated /run route, which persists a Cloudflare Queues message before returning 202. A single-concurrency queue consumer executes one persisted role per message and enqueues its successor. Long operations therefore do not depend on the browser request or a 30-second waitUntil window. Pending Firefly jobs schedule a delayed queue message; network delivery retries are bounded and a separate dead letter queue retains unresolved transport failures. The 15-minute cron checks pending work and measurements.

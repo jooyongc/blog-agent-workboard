@@ -1202,6 +1202,9 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                       failed: "실패 · 결과 확인",
                       researching: "리서치 중",
                       generating: "작성 중",
+                      agent_pending: "미디어 에이전트 작업 중",
+                      verifying: "검증 에이전트 작업 중",
+                      publishing: "임시 발행 중",
                       needs_reconcile: "중단 · 원격 확인",
                     } as Record<string, string>
                   )[j.status] ?? j.status}

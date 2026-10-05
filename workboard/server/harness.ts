@@ -90,6 +90,23 @@ export async function advanceHarness(env: Env) {
     .run();
   const payload = JSON.parse(task.payload_json),
     w = await workspace(env, task.site_id);
+  await env.WORKBOARD_DB.prepare(
+    "UPDATE content_jobs SET status=?,error=NULL,updated_at=? WHERE id=?",
+  )
+    .bind(
+      (
+        {
+          researcher: "researching",
+          writer: "generating",
+          photo_editor: "agent_pending",
+          verifier: "verifying",
+          publisher: "publishing",
+        } as Record<string, string>
+      )[task.stage] || "agent_pending",
+      new Date().toISOString(),
+      task.job_id,
+    )
+    .run();
   let repairNext: string | undefined;
   try {
     if (task.stage === "researcher")
@@ -334,7 +351,7 @@ async function saveProgress(
   status: string,
 ) {
   await env.WORKBOARD_DB.prepare(
-    "UPDATE content_jobs SET request_json=?,article_json=?,quality_json=?,remote_json=?,status=?,updated_at=? WHERE id=?",
+    "UPDATE content_jobs SET request_json=?,article_json=?,quality_json=?,remote_json=?,status=?,error=NULL,updated_at=? WHERE id=?",
   )
     .bind(
       JSON.stringify(payload.input),
