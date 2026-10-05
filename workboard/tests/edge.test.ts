@@ -779,3 +779,42 @@ test("only licensed hosted videos become safe embedded players", () => {
     !renderMarkdown("[Video: bad](javascript:alert(1))").includes("<video"),
   );
 });
+
+test("queue consumer persists the successor instead of relying on request lifetime", async () => {
+  const worker = (await import("../../scheduler/index")).default;
+  const original = globalThis.fetch;
+  let acked = 0,
+    retried = 0;
+  const sent: any[] = [];
+  globalThis.fetch = async () => Response.json({ worked: true, waiting: true });
+  try {
+    await worker.queue(
+      {
+        messages: [
+          {
+            ack() {
+              acked++;
+            },
+            retry() {
+              retried++;
+            },
+          },
+        ],
+      } as any,
+      {
+        WORKBOARD_URL: "https://test.pages.dev",
+        SCHEDULER_TOKEN: "test",
+        AGENT_QUEUE: {
+          async send(body: any, options: any) {
+            sent.push({ body, options });
+          },
+        },
+      } as any,
+    );
+    assert.equal(acked, 1);
+    assert.equal(retried, 0);
+    assert.equal(sent[0].options.delaySeconds, 10);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
