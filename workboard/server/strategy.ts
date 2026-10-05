@@ -157,7 +157,7 @@ export function normalizeUrl(url: string) {
 /**
  * Keep only researcher sources that point at an actual web_search result on a
  * configured domain. URLs are matched after normalization (scheme, www, trailing
- * slash, hash, query order) and, when unambiguous, by origin + path alone.
+ * slash, hash, query order) without discarding content-identifying query parameters.
  * The accepted URL is the verbatim search-result URL, never the model's spelling.
  */
 export function reconcileSources(
@@ -170,12 +170,6 @@ export function reconcileSources(
     const n = normalizeUrl(e);
     if (n && !known.has(n)) known.set(n, e);
   }
-  const byPath = new Map<string, string[]>();
-  for (const n of known.keys()) {
-    const u = new URL(n),
-      k = u.origin + u.pathname;
-    byPath.set(k, [...(byPath.get(k) ?? []), n]);
-  }
   const accepted: ResearchSource[] = [],
     rejected: { url: string; reason: string }[] = [];
   const list = Array.isArray(sources) ? sources : [];
@@ -187,11 +181,6 @@ export function reconcileSources(
     }
     const n = normalizeUrl(s.url);
     let match = n && known.has(n) ? n : "";
-    if (!match && n) {
-      const u = new URL(n),
-        candidates = byPath.get(u.origin + u.pathname) ?? [];
-      if (candidates.length === 1) match = candidates[0];
-    }
     if (!match) {
       rejected.push({ url: s.url, reason: "검색 결과에 없음" });
       continue;

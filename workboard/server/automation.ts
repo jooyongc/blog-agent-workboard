@@ -168,9 +168,32 @@ export async function verifyGenerated(
         ? { source_url: c.source_url.slice(0, 500) }
         : {}),
     }));
+  const malformed = claims.length !== rawClaims.length;
+  for (const lang of w.languages) {
+    if (!claims.some((c) => c.lang === lang))
+      claims.push({
+        lang,
+        claim: "해당 언어의 검증 결과가 없습니다.",
+        status: "unsupported",
+      });
+  }
+  for (const claim of claims) {
+    if (
+      claim.status === "verified" &&
+      (!claim.source_url ||
+        !evidence[claim.lang]?.sources?.some(
+          (source) => source.url === claim.source_url,
+        ))
+    )
+      claim.status = "unsupported";
+  }
   const failing = claims.filter((c) => c.status !== "verified");
   const verified = claims.length - failing.length;
-  const passed = r.data.passed === true && claims.length > 0 && !failing.length;
+  const passed =
+    r.data.passed === true &&
+    !malformed &&
+    claims.length > 0 &&
+    !failing.length;
   const reason = passed
     ? `구체적 주장 ${verified}건이 모두 연구 근거로 확인되었습니다.`
     : !claims.length

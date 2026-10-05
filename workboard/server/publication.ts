@@ -4,7 +4,7 @@ import { connection, draftPayload, renderMarkdown } from "./content";
 import { publicHttps, variable, articleUrl } from "./registry";
 import { schema, schemaHtml } from "./seo";
 import { HttpError, remote } from "./http";
-import { savedRefresh } from "./oauth";
+import { savedRefresh, googleCredentials } from "./oauth";
 type Receipt = { phase: string; remote_json: string | null };
 async function receipt(env: Env, job: string, lang: string, phase: string) {
   return env.WORKBOARD_DB.prepare(
@@ -51,13 +51,14 @@ export async function bloggerToken(w: Workspace, env: Env) {
     variable(env, c.client_secret_env) &&
     refresh
   ) {
+    const { client, secret } = googleCredentials(env, w);
     const res = await remote("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         grant_type: "refresh_token",
-        client_id: variable(env, c.client_id_env),
-        client_secret: variable(env, c.client_secret_env),
+        client_id: client,
+        client_secret: secret,
         refresh_token: refresh,
       }).toString(),
     });

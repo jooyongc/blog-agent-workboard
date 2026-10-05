@@ -45,16 +45,25 @@ export async function savedRefresh(env: Env, site: string) {
     ),
   );
 }
+export function googleCredentials(
+  env: Env,
+  w: import("../shared/types").Workspace,
+) {
+  const client = variable(env, w.connection.client_id_env).trim();
+  const secret = variable(env, w.connection.client_secret_env).trim();
+  if (!/^[0-9]+-[a-zA-Z0-9_-]+\.apps\.googleusercontent\.com$/.test(client))
+    throw new HttpError(
+      503,
+      "Blogger Client ID가 Google OAuth 형식이 아닙니다. Cloudflare BLOGGER_CLIENT_ID에 웹 애플리케이션 OAuth 클라이언트 ID를 등록하세요.",
+    );
+  if (!secret) throw new HttpError(503, "Blogger Client Secret을 등록하세요.");
+  return { client, secret };
+}
 export async function oauthStart(env: Env, siteId: string, origin: string) {
   const w = await workspace(env, siteId);
   if (w.integration !== "blogger")
     throw new HttpError(400, "Blogger 연결을 선택하세요.");
-  const client = variable(env, w.connection.client_id_env);
-  if (!client || !variable(env, w.connection.client_secret_env))
-    throw new HttpError(
-      503,
-      "Blogger OAuth client ID·secret 변수를 먼저 등록하세요.",
-    );
+  const { client } = googleCredentials(env, w);
   const state = crypto.randomUUID() + crypto.randomUUID(),
     uri = origin + "/api/blogger/oauth/callback";
   await env.WORKBOARD_DB.prepare(
@@ -88,22 +97,29 @@ export async function oauthCallback(env: Env, url: URL) {
       "Google 인증이 완료되지 않았습니다. 연결을 다시 시작하세요.",
     );
   const w = await workspace(env, r.site_id);
+  const { client, secret } = googleCredentials(env, w);
   const res = await remote("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       code,
-      client_id: variable(env, w.connection.client_id_env),
-      client_secret: variable(env, w.connection.client_secret_env),
+      client_id: client,
+      client_secret: secret,
       redirect_uri: r.redirect_uri,
       grant_type: "authorization_code",
     }).toString(),
   });
-  if (!res.ok)
+  if (!res.ok) {
+    const error = (await res.json().catch(() => ({}))) as { error?: string };
     throw new HttpError(
       503,
-      "Google OAuth 응답을 확인하세요. 승인된 리다이렉트 URI가 일치해야 합니다.",
+      error.error === "invalid_client"
+        ? "Google에서 OAuth 클라이언트를 찾지 못했습니다. BLOGGER_CLIENT_ID·SECRET이 같은 활성 웹 클라이언트의 값인지 확인하세요."
+        : error.error === "redirect_uri_mismatch"
+          ? "Google OAuth 클라이언트의 승인된 리다이렉트 URI에 /api/blogger/oauth/callback 주소를 등록하세요."
+          : "Google 인증 코드 교환에 실패했습니다. 연결을 다시 시작하세요.",
     );
+  }
   const data = (await res.json()) as {
     access_token: string;
     refresh_token?: string;

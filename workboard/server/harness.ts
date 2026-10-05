@@ -6,6 +6,7 @@ import { generate } from "./ai";
 import { illustrate } from "./media";
 import { verifyGenerated } from "./automation";
 import { quality } from "./seo";
+import { validateDraft } from "./content";
 import { publishJob } from "./publication";
 import { HttpError } from "./http";
 import { creativeAsset, fireflyReady, PendingMedia } from "./firefly";
@@ -306,6 +307,16 @@ export async function advanceHarness(env: Env) {
       }
     }
     if (task.stage === "publisher") {
+      validateDraft(payload.input, w);
+      if (
+        !w.languages.every(
+          (l) => quality(payload.input.translations[l], w, l).passed,
+        )
+      )
+        throw new HttpError(
+          409,
+          "발행 직전 현재 전략의 품질 검증을 통과하지 못했습니다.",
+        );
       if (!(await readiness(w, env)).ready)
         throw new HttpError(
           503,

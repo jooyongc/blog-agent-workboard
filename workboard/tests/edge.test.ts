@@ -10,8 +10,14 @@ import type { Env } from "../server/env";
 import type { DraftInput } from "../shared/types";
 import { articleUrl, workspace } from "../server/registry";
 import { quality, extractFaq, schema } from "../server/seo";
+import { googleCredentials } from "../server/oauth";
 import { publishJob } from "../server/publication";
-import { enqueueApproved, canRepairAgain } from "../server/harness";
+import { modelJson } from "../server/model";
+import {
+  advanceHarness,
+  enqueueApproved,
+  canRepairAgain,
+} from "../server/harness";
 import { insertStockPhotos } from "../server/media";
 import { creativeAsset, PendingMedia } from "../server/firefly";
 import { verifyGenerated } from "../server/automation";
@@ -1063,4 +1069,104 @@ test("verification repair is bounded: one rewrite, a second only when claims dec
   assert.equal(canRepairAgain(1, 1, 2), false);
   assert.equal(canRepairAgain(1, undefined, 1), false);
   assert.equal(canRepairAgain(2, 3, 1), false);
+});
+
+test("research reconciliation never substitutes a different article query ID", () => {
+  const out = reconcileSources(
+    [
+      {
+        url: "https://english.visitkorea.or.kr/svc/contents/contentsView.do?vcontsId=999",
+        claim: "wrong story",
+        evidence: "text",
+      },
+    ],
+    [
+      "https://english.visitkorea.or.kr/svc/contents/contentsView.do?vcontsId=123",
+    ],
+    ["english.visitkorea.or.kr"],
+  );
+  assert.equal(out.accepted.length, 0);
+});
+test("Google OAuth rejects wrong identifiers and trims credential whitespace", () => {
+  const { env } = environment();
+  const w = structuredClone(CATALOG[0]);
+  env.BLOGGER_CLIENT_ID = "wrong-provider-key";
+  env.BLOGGER_CLIENT_SECRET = "secret";
+  assert.throws(() => googleCredentials(env, w), /Google OAuth/);
+  env.BLOGGER_CLIENT_ID = " 12345-valid_web_client.apps.googleusercontent.com ";
+  env.BLOGGER_CLIENT_SECRET = " secret ";
+  assert.deepEqual(googleCredentials(env, w), {
+    client: "12345-valid_web_client.apps.googleusercontent.com",
+    secret: "secret",
+  });
+});
+
+test("confirmed rejected model requests release reservations without inventing paid usage", async () => {
+  const { env, d } = environment();
+  env.ANTHROPIC_API_KEY = "test-key";
+  const original = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json({ error: "bad request" }, { status: 400 });
+  try {
+    await assert.rejects(modelJson(env, "test-budget", "system", {}));
+    const row = d.sqlite
+      .prepare(
+        "SELECT reserved,actual,status FROM ai_runs WHERE article_key='test-budget'",
+      )
+      .get();
+    assert.equal(row?.reserved, 0);
+    assert.equal(row?.actual, 0);
+    assert.equal(row?.status, "failed");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+test("publisher checks current article quality before any remote delivery", async () => {
+  const { env, d } = environment();
+  const now = new Date().toISOString();
+  const input = {
+    site_id: "koreadecode",
+    slug: "test-publisher",
+    category: "Culture",
+    request_id: "publisher-check",
+    reviewed: true,
+    translations: {
+      en: {
+        title: "test",
+        meta_description: "test",
+        tags: [],
+        content_md: "too short",
+      },
+    },
+  };
+  d.sqlite
+    .prepare(
+      "INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES(?,?,?,'publisher','pending',?,?,?)",
+    )
+    .run(
+      "publisher-check",
+      "test-topic",
+      "koreadecode",
+      JSON.stringify({ input, quality: { factual: true } }),
+      now,
+      now,
+    );
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw Error("Remote delivery should not happen");
+  };
+  try {
+    const result = await advanceHarness(env);
+    assert.ok("error" in result);
+    assert.equal(
+      d.sqlite
+        .prepare(
+          "SELECT status FROM agent_workflows WHERE job_id='publisher-check'",
+        )
+        .get()?.status,
+      "failed",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
 });

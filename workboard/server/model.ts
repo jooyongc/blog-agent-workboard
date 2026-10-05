@@ -33,10 +33,19 @@ export async function modelJson(
         new Date(now).toISOString(),
       )
       .run();
-  } catch {
-    throw new HttpError(429, "글·주간·월간 AI 예산 한도에 도달했습니다.");
+  } catch (error) {
+    const detail = String(error);
+    const message = detail.includes("monthly_budget")
+      ? "월간 AI 예산 $10 한도에 도달했습니다."
+      : detail.includes("weekly_budget")
+        ? "주간 AI 예산 $2 한도에 도달했습니다."
+        : detail.includes("article_budget")
+          ? "이 글의 AI 예산 $0.50 한도에 도달했습니다."
+          : "AI 예산 예약을 저장하지 못했습니다.";
+    throw new HttpError(detail.includes("budget") ? 429 : 503, message);
   }
-  let cost = 0;
+  let cost = 0,
+    settled = false;
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -66,11 +75,13 @@ export async function modelJson(
           : {}),
       }),
     });
-    if (!res.ok)
+    if (!res.ok) {
+      settled = true;
       throw new HttpError(
         502,
         "AI 요청을 처리하지 못했습니다. 자동 재시도하지 않았습니다.",
       );
+    }
     const d = (await res.json()) as {
       stop_reason: string;
       content: { type: string; text?: string; content?: unknown }[];
@@ -83,6 +94,7 @@ export async function modelJson(
     cost =
       (d.usage.input_tokens + d.usage.output_tokens * 5) / 1000000 +
       (d.usage.server_tool_use?.web_search_requests ?? 0) * 0.01;
+    settled = true;
     await env.WORKBOARD_DB.prepare(
       "UPDATE ai_runs SET actual=?,reserved=?,status='complete' WHERE id=?",
     )
@@ -122,9 +134,9 @@ export async function modelJson(
     };
   } catch (e) {
     await env.WORKBOARD_DB.prepare(
-      "UPDATE ai_runs SET actual=?,status='failed' WHERE id=?",
+      "UPDATE ai_runs SET actual=?,reserved=CASE WHEN ? THEN ? ELSE reserved END,status='failed' WHERE id=?",
     )
-      .bind(cost, id)
+      .bind(settled ? cost : null, settled ? 1 : 0, cost, id)
       .run();
     throw e instanceof HttpError
       ? e
