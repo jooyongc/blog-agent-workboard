@@ -891,7 +891,11 @@ a {
   background: transparent;
 }
 .content-table-scroll {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 .content-table {
   width: 100%;
