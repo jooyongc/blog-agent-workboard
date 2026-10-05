@@ -27,3 +27,6 @@ dashboard/tsconfig.tsbuildinfo
 **/.dev.vars.*
 !**/.dev.vars.example
 /workboard/dist/
+
+# Claude Code bkit plugin local state
+.bkit/
