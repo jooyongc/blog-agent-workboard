@@ -18,7 +18,7 @@ export async function modelJson(
     );
   const bytes = new TextEncoder().encode(system + JSON.stringify(input)).length;
   const reservation =
-    bytes / 1000000 + (maxTokens * 5) / 1000000 + (search?.length ? 0.03 : 0);
+    bytes / 1000000 + (maxTokens * 5) / 1000000 + (search?.length ? 0.1 : 0);
   try {
     await env.WORKBOARD_DB.prepare(
       "INSERT INTO ai_runs(id,article_key,month,week,reserved,status,created_at) VALUES(?,?,?,?,?,?,?)",

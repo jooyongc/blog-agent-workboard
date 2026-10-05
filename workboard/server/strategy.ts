@@ -103,7 +103,7 @@ export async function research(
         pillars: w.strategy.pillars,
         today: new Date().toISOString().slice(0, 10),
       },
-      2200,
+      4000,
       w.strategy.source_domains,
     );
     if (!Array.isArray(r.data.sources) || r.data.sources.length < 2)
