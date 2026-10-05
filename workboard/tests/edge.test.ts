@@ -245,6 +245,15 @@ test("FAQ schema reflects visible answers and images do not count as cited sourc
     faq.map((x) => x.question),
   );
 });
+test("plain Q/A paragraphs from a generated article remain visible FAQ data", () => {
+  const text =
+    "## FAQs\n\nQ: What is banchan?\n\nA: Shared side dishes.\n\nQ: Can I ask for more?\n\nA: Ask the restaurant politely.\n\nQ: Where are chopsticks placed?\n\nA: Beside the spoon.\n\nLast updated: 2026-10-05";
+  assert.deepEqual(extractFaq(text), [
+    { question: "What is banchan?", answer: "Shared side dishes." },
+    { question: "Can I ask for more?", answer: "Ask the restaurant politely." },
+    { question: "Where are chopsticks placed?", answer: "Beside the spoon." },
+  ]);
+});
 test("private APIs require a session and block cross-origin mutation", async () => {
   const { env } = environment();
   assert.equal((await request("workspaces", env, {}, false)).status, 401);

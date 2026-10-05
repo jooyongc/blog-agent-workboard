@@ -108,6 +108,24 @@ export async function verifyGenerated(
     r.data.claims.every((c: { status: string }) => c.status === "verified")
   );
 }
+export function researchEvidence(input: DraftInput, w: Workspace) {
+  const evidence: Record<
+    string,
+    { sources: { url: string; claim: string; evidence: string }[] }
+  > = {};
+  for (const lang of w.languages) {
+    const note = input.translations[lang]?.source_notes;
+    if (!note) return null;
+    try {
+      const parsed = JSON.parse(note);
+      if (!Array.isArray(parsed.sources)) return null;
+      evidence[lang] = parsed;
+    } catch {
+      return null;
+    }
+  }
+  return evidence;
+}
 export async function tick(env: Env, now = Date.now(), dryRun = false) {
   const workspaces = await listWorkspaces(env);
   const due = workspaces.filter(
@@ -357,7 +375,12 @@ export async function tick(env: Env, now = Date.now(), dryRun = false) {
     "SELECT * FROM content_jobs WHERE status='ready' AND publish_at<=? ORDER BY publish_at LIMIT 5",
   )
     .bind(new Date(now).toISOString())
-    .all<{ id: string; site_id: string; request_json: string }>();
+    .all<{
+      id: string;
+      site_id: string;
+      request_json: string;
+      quality_json: string | null;
+    }>();
   for (const j of queued.results) {
     const w = await workspace(env, j.site_id);
     if (!w.schedule.enabled) continue;
@@ -370,6 +393,14 @@ export async function tick(env: Env, now = Date.now(), dryRun = false) {
     try {
       const input = JSON.parse(j.request_json) as DraftInput;
       validateDraft(input, w);
+      if (
+        researchEvidence(input, w) &&
+        JSON.parse(j.quality_json ?? "{}").factual !== true
+      )
+        throw new HttpError(
+          409,
+          "자동 작성 글의 출처 검증이 완료되지 않았습니다.",
+        );
       if (
         !w.languages.every((l) => quality(input.translations[l], w, l).passed)
       )

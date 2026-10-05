@@ -1,17 +1,35 @@
 import type { Workspace, Article, Quality } from "../shared/types";
-export const SEO_RULES = `Apply the restored SEO/AEO/GEO playbook. Front-load a natural primary keyword in a question, definition, how-to or comparison title (no vague "ultimate guide"). Start content with a ## Quick Answer (40-80 English words or concise Japanese equivalent). Use exactly three main question-form H2 sections, each followed immediately by a direct answer. Include one definition of the main entity, named relevant entities, sourced atomic facts (never invent numbers), relevant verified internal links, and a 4-6 row comparison table only when the topic is a comparison. End with 3-5 visible FAQ pairs in the EXACT format **Q: question** followed on the next line by A: answer; Japanese Q text must be natural Japanese. Include Last updated: YYYY-MM-DD, with sources inline. Avoid body bold except FAQ Q labels. Meta description answers the title question, <=160 characters. Use only verified primary evidence; distinguish uncertainty and opinions. Never fabricate search volume, GSC positions, prices, rankings, source URLs, images, affiliate codes or entities. Structured FAQ data must match visible content. Follow the site's audience, pillars and voice; no ASTY content.`;
+export const SEO_RULES = `Apply the restored SEO/AEO/GEO playbook. Front-load a natural primary keyword in a question, definition, how-to or comparison title (no vague "ultimate guide"). Start content with a ## Quick Answer (40-80 English words or concise Japanese equivalent). Use exactly three main question-form H2 sections, each followed immediately by a direct answer. Include one definition of the main entity, named relevant entities, sourced atomic facts (never invent numbers), relevant verified internal links, and a 4-6 row comparison table only when the topic is a comparison. End with 3-5 visible FAQ pairs, each with Q: question on one line and A: answer on the next nonblank line; bold Q labels are optional. Japanese Q text must be natural Japanese. Include Last updated: YYYY-MM-DD, with sources inline. Avoid body bold except FAQ Q labels. Meta description answers the title question, <=160 characters. Use only verified primary evidence; distinguish uncertainty and opinions. Never fabricate search volume, GSC positions, prices, rankings, source URLs, images, affiliate codes or entities. Structured FAQ data must match visible content. Follow the site's audience, pillars and voice; no ASTY content.`;
 export function extractFaq(md: string) {
-  return Array.from(
-    md.matchAll(
-      /\*\*Q:\s*(.+?)\*\*\s*\nA:\s*([\s\S]+?)(?=\n\n|\n\*\*Q:|\n## |$)/g,
-    ),
-  ).map((m) => ({
-    question: m[1].trim(),
-    answer: m[2]
-      .trim()
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-      .replace(/[*_`]/g, ""),
-  }));
+  const lines = md.split(/\r?\n/);
+  const faq: { question: string; answer: string }[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const question = lines[i].trim().match(/^(?:\*\*)?Q:\s*(.+?)(?:\*\*)?$/);
+    if (!question) continue;
+    let next = i + 1;
+    while (next < lines.length && !lines[next].trim()) next++;
+    const answer = lines[next]?.trim().match(/^A:\s*(.+)$/);
+    if (!answer) continue;
+    const answerLines = [answer[1]];
+    let end = next + 1;
+    while (end < lines.length) {
+      const line = lines[end].trim();
+      if (/^(?:\*\*)?Q:|^#{1,6}\s|^Last updated:|^Sources?:|^!\[/.test(line))
+        break;
+      if (line) answerLines.push(line);
+      end++;
+    }
+    faq.push({
+      question: question[1].replace(/\*\*$/, "").trim(),
+      answer: answerLines
+        .join(" ")
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+        .replace(/[*_`]/g, "")
+        .trim(),
+    });
+    i = end - 1;
+  }
+  return faq;
 }
 export function quality(article: Article, w: Workspace, lang: string): Quality {
   const md = article.content_md;

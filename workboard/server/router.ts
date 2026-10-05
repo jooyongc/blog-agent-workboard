@@ -14,7 +14,13 @@ import {
 import { generate } from "./ai";
 import { propose, research } from "./strategy";
 import { quality } from "./seo";
-import { enqueue, jobs, tick } from "./automation";
+import {
+  enqueue,
+  jobs,
+  tick,
+  verifyGenerated,
+  researchEvidence,
+} from "./automation";
 import { oauthStart, oauthCallback } from "./oauth";
 import { mediaResponse } from "./media";
 import { measure } from "./measurement";
@@ -249,6 +255,38 @@ export async function onRequest({ request, env }: Context): Promise<Response> {
         throw new HttpError(400, "주제를 확인하세요.");
       return json(await research(env, i.site_id, i.title, i.category));
     }
+    if (route === "topics/feedback" && method === "POST") {
+      const i = await body<{
+        site_id: string;
+        title: string;
+        rating: number;
+        context?: unknown;
+      }>(request);
+      const w = await workspace(env, i.site_id);
+      if (
+        typeof i.title !== "string" ||
+        !i.title.trim() ||
+        i.title.length > 300 ||
+        ![1, -1].includes(i.rating)
+      )
+        throw new HttpError(400, "주제 피드백을 확인하세요.");
+      const context = JSON.stringify(i.context ?? {});
+      if (context.length > 10000)
+        throw new HttpError(400, "피드백 내용이 너무 깁니다.");
+      await env.WORKBOARD_DB.prepare(
+        "INSERT INTO topic_feedback(id,site_id,title,rating,context_json,created_at) VALUES(?,?,?,?,?,?)",
+      )
+        .bind(
+          crypto.randomUUID(),
+          w.site_id,
+          i.title,
+          i.rating,
+          context,
+          new Date().toISOString(),
+        )
+        .run();
+      return json({ saved: true }, 201);
+    }
     if (route === "topics" && method === "GET") {
       const w = await workspace(
         env,
@@ -337,17 +375,34 @@ export async function onRequest({ request, env }: Context): Promise<Response> {
         w = await workspace(env, i.input.site_id);
       validateDraft(i.input, w);
       const existing = await env.WORKBOARD_DB.prepare(
-        "SELECT slug FROM content_jobs WHERE id=? AND site_id=? AND status IN ('review','ready')",
+        "SELECT slug,request_json,quality_json FROM content_jobs WHERE id=? AND site_id=? AND status IN ('review','ready')",
       )
         .bind(i.id, w.site_id)
-        .first<{ slug: string }>();
+        .first<{
+          slug: string;
+          request_json: string;
+          quality_json: string | null;
+        }>();
       if (!existing || existing.slug !== i.input.slug)
         throw new HttpError(409, "예약 글 주소는 변경할 수 없습니다.");
       const scores = Object.fromEntries(
         w.languages.map((l) => [l, quality(i.input.translations[l], w, l)]),
       );
+      const evidence = researchEvidence(i.input, w);
+      let factual = true;
+      if (evidence) {
+        const old = JSON.parse(existing.quality_json ?? "{}");
+        const prior = JSON.parse(existing.request_json) as DraftInput;
+        factual =
+          old.factual === true &&
+          JSON.stringify(prior.translations) ===
+            JSON.stringify(i.input.translations);
+        if (!factual)
+          factual = await verifyGenerated(env, w, i.input, evidence);
+      }
       const pass =
         i.input.reviewed === true &&
+        factual &&
         Object.values(scores).every((q) => q.passed);
       if (!Number.isFinite(Date.parse(i.publish_at)))
         throw new HttpError(400, "예약 시간을 확인하세요.");
@@ -357,7 +412,7 @@ export async function onRequest({ request, env }: Context): Promise<Response> {
         .bind(
           JSON.stringify(i.input),
           JSON.stringify(i.input.translations),
-          JSON.stringify(scores),
+          JSON.stringify(evidence ? { languages: scores, factual } : scores),
           pass ? "ready" : "review",
           i.publish_at,
           new Date().toISOString(),

@@ -10,6 +10,13 @@ export type Strategy = {
     category: string;
     keyword: string;
     format: string;
+    emoji?: string;
+    hint?: string;
+    group?: string;
+    direction?: string;
+    tags?: string[];
+    aeo?: boolean;
+    seasonal_months?: number[];
   }[];
   min_score: number;
   required_images: number;

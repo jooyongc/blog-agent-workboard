@@ -399,11 +399,12 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
                       templates: e.target.value
                         .split("\n")
                         .filter((s) => s.trim())
-                        .map((s) => {
+                        .map((s, i) => {
                           const [title, category, keyword, format] = s
                             .split("|")
                             .map((s) => s.trim());
                           return {
+                            ...editing.strategy.templates[i],
                             title,
                             category,
                             keyword,
@@ -664,6 +665,15 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
   );
 }
 export function StrategyTopics({ active }: Pick<Props, "active">) {
+  const [templateGroup, setTemplateGroup] = useState("전체");
+  const [templatesOpen, setTemplatesOpen] = useState(true);
+  const [selectedTemplate, setSelectedTemplate] = useState<number | null>(null);
+  const [votes, setVotes] = useState<Record<number, string>>({});
+  const groups = [
+    "전체",
+    ...new Set(active.strategy.templates.map((t) => t.group || t.category)),
+  ];
+  const month = new Date().getMonth() + 1;
   const [direction, setDirection] = useState(
     active.strategy.pillars.join(", "),
   );
@@ -692,6 +702,7 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
         },
       );
       setProposals(r.data.proposals);
+      setVotes({});
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -723,10 +734,89 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
   return (
     <div className="studio-page">
       <Header
-        title="노출 전략에 맞춘 다음 주제"
+        title="디렉션"
         note={`${active.name} · 대상 독자, 기존 글, 키워드 기회와 질문 의도를 함께 살펴봅니다.`}
       />
       {note(error)}
+      <section className="studio-panel direction-assistant">
+        <div className="panel-heading">
+          <h2>✳ 방향 어시스턴트</h2>
+          <span className="subtle-pill">
+            {active.strategy.templates.length}개 템플릿
+          </span>
+          <button
+            className="button-secondary"
+            aria-expanded={templatesOpen}
+            onClick={() => setTemplatesOpen(!templatesOpen)}
+          >
+            {templatesOpen ? "접기" : "펼치기"}
+          </button>
+        </div>
+        {templatesOpen && (
+          <div className="form-body">
+            <div className="direction-filters" aria-label="디렉션 카테고리">
+              {groups.map((group) => (
+                <button
+                  key={group}
+                  aria-pressed={templateGroup === group}
+                  className={templateGroup === group ? "selected" : ""}
+                  onClick={() => setTemplateGroup(group)}
+                >
+                  {group}
+                </button>
+              ))}
+            </div>
+            <div className="direction-template-grid">
+              {active.strategy.templates
+                .map((t, i) => ({ t, i }))
+                .filter(
+                  ({ t }) =>
+                    templateGroup === "전체" ||
+                    (t.group || t.category) === templateGroup,
+                )
+                .map(({ t, i }) => (
+                  <button
+                    key={i}
+                    className={`direction-template ${selectedTemplate === i ? "selected" : ""}`}
+                    aria-pressed={selectedTemplate === i}
+                    onClick={() => {
+                      setSelectedTemplate(i);
+                      setDirection(
+                        t.direction ||
+                          `${active.name}의 독자를 대상으로 ${t.title} 방향에서 주제 3개를 제안하세요. 핵심 키워드: ${t.keyword}. 형식: ${t.format}.`,
+                      );
+                    }}
+                  >
+                    <div className="direction-template-heading">
+                      <strong>
+                        {t.emoji || "✦"} {t.title}
+                      </strong>
+                      {t.aeo && <span className="direction-aeo">● AEO</span>}
+                      {t.seasonal_months?.includes(month) && (
+                        <span className="direction-aeo">● 제철</span>
+                      )}
+                      <span className="subtle-pill direction-category">
+                        {t.group || t.category}
+                      </span>
+                    </div>
+                    <p>{t.hint || t.keyword}</p>
+                    <div className="direction-tags">
+                      {(t.tags || [t.category, t.format]).map((tag) => (
+                        <span key={tag} className="subtle-pill">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </button>
+                ))}
+            </div>
+            <small>
+              템플릿을 선택하면 아래 작성 방향에 반영됩니다. 사이트 전략에 맞춰
+              자유롭게 수정하세요.
+            </small>
+          </div>
+        )}
+      </section>
       <section className="studio-panel">
         <div className="panel-heading">
           <h2>저장된 사이트 전략</h2>
@@ -748,12 +838,20 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
       </section>
       <section className="studio-panel">
         <div className="panel-heading">
-          <h2>이번 주 작성 방향</h2>
+          <h2>
+            이번 주 작성 방향{" "}
+            {selectedTemplate !== null && (
+              <span className="subtle-pill">
+                {active.strategy.templates[selectedTemplate]?.title}
+              </span>
+            )}
+          </h2>
         </div>
         <div className="form-body">
           <textarea
             className="direction-input"
-            rows={3}
+            aria-label="이번 주 작성 방향"
+            rows={5}
             value={direction}
             onChange={(e) => setDirection(e.target.value)}
           />
@@ -791,6 +889,40 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
                 ? "실측 GSC 기회"
                 : "저장된 전략 기반 · 검색량 추정 없음"}
             </small>
+            <div className="direction-votes">
+              {[1, -1].map((rating) => (
+                <button
+                  className="button-secondary"
+                  key={rating}
+                  disabled={busy || !!votes[i]}
+                  onClick={() => {
+                    setVotes((v) => ({ ...v, [i]: "저장 중" }));
+                    void api("topics/feedback", {
+                      method: "POST",
+                      body: JSON.stringify({
+                        site_id: active.site_id,
+                        title: t.title,
+                        rating,
+                        context: t,
+                      }),
+                    })
+                      .then(() =>
+                        setVotes((v) => ({
+                          ...v,
+                          [i]: rating === 1 ? "선호 반영됨" : "비선호 반영됨",
+                        })),
+                      )
+                      .catch((e) => {
+                        setVotes((v) => ({ ...v, [i]: "" }));
+                        setError(e.message);
+                      });
+                  }}
+                >
+                  {rating === 1 ? "👍 이런 방향 좋아요" : "👎 다른 방향 원해요"}
+                </button>
+              ))}
+              {votes[i] && <small role="status">{votes[i]}</small>}
+            </div>
             <button
               className="button-primary mt-4"
               disabled={busy}
@@ -806,24 +938,6 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
           <h2>사이트별 저장 주제</h2>
         </div>
         <div className="idea-list">
-          {active.strategy.templates.map((t, i) => (
-            <article key={"template" + i}>
-              <span className="subtle-pill">
-                {t.category} · {t.format}
-              </span>
-              <h3>{t.title}</h3>
-              <p>{t.keyword}</p>
-              <button
-                className="button-secondary"
-                disabled={busy}
-                onClick={() =>
-                  void approve({ ...t, primary_keyword: t.keyword })
-                }
-              >
-                작성 주제로 승인
-              </button>
-            </article>
-          ))}
           {topics.map((t) => (
             <article key={t.id}>
               <span

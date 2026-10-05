@@ -25,7 +25,12 @@ export async function propose(
   )
     throw new HttpError(400, "이번 주 작성 방향을 입력하세요.");
   const recent = await getPosts(w, env).catch(() => ({ posts: [] }));
-  let gsc = input.gsc_striking ?? [];
+  let gsc: { query: string; avg_position: number; impressions: number }[] = [];
+  const feedback = await env.WORKBOARD_DB.prepare(
+    "SELECT title,rating,context_json FROM topic_feedback WHERE site_id=? ORDER BY created_at DESC LIMIT 30",
+  )
+    .bind(w.site_id)
+    .all();
   if (w.strategy.gsc_url) {
     publicHttps(w.strategy.gsc_url);
     const res = await remote(w.strategy.gsc_url, {
@@ -50,13 +55,14 @@ export async function propose(
   const r = await modelJson(
     env,
     `${w.site_id}/director-${new Date().toISOString().slice(0, 10)}`,
-    `You are the restored multi-site Director + SEO Researcher. Produce exactly 3 ranked executable topic proposals for the site's audience and pillars. Prefer actual GSC striking-distance queries (positions 8-20), avoid cannibalizing recent titles, rank 40 points audience fit + 30 SEO opportunity + 20 novelty + 10 confidence. Use site templates, seasonal relevance and named entities. Emit 2-3 AEO question variants for each. Never invent search volume, position, rankings or evidence. With no measured/search evidence mark source=strategy_only and estimated_difficulty=unknown. ${SEO_RULES} Return JSON {proposals:[{title,category,pillar,primary_keyword,secondary_keywords:[],aeo_question_variants:[],format,score,rationale,source,estimated_difficulty,striking_distance_hit}]}.`,
+    `You are the restored multi-site Director + SEO Researcher. Produce exactly 3 ranked executable topic proposals for the site's audience and pillars. Prefer actual GSC striking-distance queries (positions 8-20), avoid cannibalizing recent titles, rank 40 points audience fit + 30 SEO opportunity + 20 novelty + 10 confidence. Use site templates, seasonal relevance and named entities. Learn topic preferences from recent_feedback: favour positively rated directions and avoid negatively rated directions without repeating the same title. Emit 2-3 AEO question variants for each. Never invent search volume, position, rankings or evidence. With no measured/search evidence mark source=strategy_only and estimated_difficulty=unknown. ${SEO_RULES} Return JSON {proposals:[{title,category,pillar,primary_keyword,secondary_keywords:[],aeo_question_variants:[],format,score,rationale,source,estimated_difficulty,striking_distance_hit}]}.`,
     {
       direction: input.direction,
       site: w,
       strategy: w.strategy,
       recent_titles: recent.posts.slice(0, 30).map((p) => p.title),
       gsc_striking: gsc,
+      recent_feedback: feedback.results,
     },
     2200,
   );
@@ -73,7 +79,14 @@ export async function propose(
     t.striking_distance_hit = gsc.some((g) => g.query === t.primary_keyword);
     t.source = t.striking_distance_hit ? "gsc_striking" : "strategy_only";
   }
-  return r;
+  return {
+    ...r,
+    context_used: {
+      recent_titles: Math.min(recent.posts.length, 30),
+      gsc_striking: gsc.length,
+      recent_feedback: feedback.results.length,
+    },
+  };
 }
 export async function research(
   env: Env,
