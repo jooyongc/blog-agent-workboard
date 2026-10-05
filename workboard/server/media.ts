@@ -155,7 +155,39 @@ export async function stockPhotos(
   env: Env,
   query: string,
   count = 2,
+  siteId?: string,
 ): Promise<StockPhoto[]> {
+  const uploaded = siteId
+    ? (
+        await env.WORKBOARD_DB.prepare(
+          "SELECT * FROM reusable_media WHERE site_id=? AND kind='photo' ORDER BY created_at DESC LIMIT 100",
+        )
+          .bind(siteId)
+          .all<{
+            id: string;
+            provider: StockPhoto["provider"];
+            title: string;
+            tags_json: string;
+            url: string;
+            source_url: string;
+          }>()
+      ).results
+        .filter((x) =>
+          JSON.parse(x.tags_json).some((tag: string) =>
+            query.toLowerCase().includes(tag),
+          ),
+        )
+        .map((x) => ({
+          id: x.id,
+          provider: x.provider,
+          url: x.url,
+          page: x.source_url,
+          photographer: x.provider,
+          photographer_url: x.source_url,
+          alt: x.title,
+          license_url: x.source_url,
+        }))
+    : [];
   const adobe = library
     .filter(
       (x) =>
@@ -172,12 +204,14 @@ export async function stockPhotos(
       alt: x.alt,
       license_url: "https://stock.adobe.com/license-terms",
     }));
+  if (uploaded.length + adobe.length >= count)
+    return [...uploaded, ...adobe].slice(0, count);
   const splash = await unsplashPhotos(
     env,
     query,
     Math.max(1, count - adobe.length),
   ).catch(() => []);
-  let photos = [...adobe, ...splash].slice(0, count);
+  let photos = [...uploaded, ...adobe, ...splash].slice(0, count);
   if (photos.length < count) {
     const pexels = await pexelsPhotos(env, query, count - photos.length).catch(
       () => [],
@@ -212,7 +246,7 @@ export function insertStockPhotos(
       Math.max(0, Math.floor(((i + 1) * blocks.length) / (photos.length + 1))),
     );
     blocks[target] +=
-      `\n\n![${clean(photo.alt)}](${photo.url})\n\n*Photo: [${clean(photo.photographer)} / ${photo.provider}](${photo.page}). Context illustration.*\n\n`;
+      `\n\n![${clean(photo.alt)}](${photo.url})\n\n${photo.provider === "Adobe Firefly" ? "*AI-generated with Adobe Firefly. Not documentary evidence.*" : `*Photo: [${clean(photo.photographer)} / ${photo.provider}](${photo.page}). Context illustration.*`}\n\n`;
   });
   return { ...article, content_md: blocks.join(""), images: photos };
 }
@@ -229,10 +263,37 @@ export async function illustrate(
     env,
     query,
     Math.max(2, Math.min(4, w.strategy.required_images)),
+    w.site_id,
   );
   for (const lang of w.languages)
     result[lang] = insertStockPhotos(result[lang], photos);
-  const videos = licensedVideos(query);
+  const registered = (
+    await env.WORKBOARD_DB.prepare(
+      "SELECT * FROM reusable_media WHERE site_id=? AND kind='video' ORDER BY created_at DESC LIMIT 100",
+    )
+      .bind(w.site_id)
+      .all<{
+        id: string;
+        provider: string;
+        title: string;
+        tags_json: string;
+        url: string;
+        source_url: string;
+      }>()
+  ).results
+    .filter((x) =>
+      JSON.parse(x.tags_json).some((tag: string) =>
+        query.toLowerCase().includes(tag),
+      ),
+    )
+    .map((x) => ({
+      id: x.id,
+      provider: x.provider,
+      alt: x.title,
+      url: x.url,
+      page: x.source_url,
+    }));
+  const videos = [...registered, ...licensedVideos(query)];
   if (videos.length)
     for (const lang of w.languages) {
       const video = videos[0];
@@ -246,7 +307,7 @@ export async function illustrate(
         },
       ];
       result[lang].content_md +=
-        `\n\n[Video: ${video.alt}](${video.url})\n\n*Video: [Adobe Stock](${video.page}). Licensed stock footage.*`;
+        `\n\n[Video: ${video.alt}](${video.url})\n\n${"provider" in video && video.provider === "Adobe Firefly" ? "*AI-generated with Adobe Firefly. Not documentary evidence.*" : `*Video: [Adobe Stock](${video.page}). Licensed stock footage.*`}`;
     }
   return result;
 }

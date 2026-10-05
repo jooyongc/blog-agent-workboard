@@ -50,6 +50,7 @@ function db() {
     "0005_stock_images.sql",
     "0006_agent_harness.sql",
     "0007_firefly_jobs.sql",
+    "0008_media_library.sql",
   ])
     d.exec(
       fs.readFileSync(

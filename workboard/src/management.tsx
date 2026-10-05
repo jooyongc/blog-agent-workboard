@@ -99,6 +99,7 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
           ＋ 워크스페이스 추가
         </button>
       </div>
+      <MediaLibrary active={active} />
       <div className="workspace-card-grid">
         {workspaces.map((w) => (
           <article className="studio-panel form-body" key={w.site_id}>
@@ -800,7 +801,7 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
       {approvedNotice && (
         <div className="success-notice" role="status">
           {approvedNotice}{" "}
-          <Link to="/automation" className="button-secondary">
+          <Link to="/flow" className="button-secondary">
             에이전트 진행 상황
           </Link>
         </div>
@@ -1027,7 +1028,7 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
                   to={
                     t.status === "proposed"
                       ? `/compose?topic=${encodeURIComponent(t.title)}&category=${encodeURIComponent(t.category)}`
-                      : "/automation"
+                      : "/flow"
                   }
                 >
                   {t.status === "proposed"
@@ -1458,5 +1459,97 @@ export function Connections({
         연결·전략 수정
       </Link>
     </div>
+  );
+}
+
+function MediaLibrary({ active }: Pick<Props, "active">) {
+  const [message, setMessage] = useState(""),
+    [busy, setBusy] = useState(false),
+    [provider, setProvider] = useState("Adobe Firefly");
+  async function upload(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const form = e.currentTarget;
+    setBusy(true);
+    setMessage("");
+    try {
+      const data = new FormData(form);
+      data.set("site_id", active.site_id);
+      const r = await fetch("/api/media-library/upload", {
+        method: "POST",
+        body: data,
+        credentials: "same-origin",
+      });
+      const result = (await r.json()) as { error?: string };
+      if (!r.ok) throw Error(result.error || "등록 실패");
+      form.reset();
+      setMessage(
+        "미디어가 저장되었습니다. 태그에 맞는 글에서 에이전트가 재사용합니다.",
+      );
+    } catch (e) {
+      setMessage((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <details className="studio-panel form-body">
+      <summary>Adobe 웹 생성물·라이선스 미디어 등록</summary>
+      <p className="flow-description">
+        Firefly 웹에서 만든 이미지·영상 또는 무료 라이선스를 받은 Stock 원본을
+        저장해 에이전트가 재사용할 수 있습니다.
+      </p>
+      <form onSubmit={(e) => void upload(e)}>
+        <label className="field-label">
+          종류
+          <select
+            name="provider"
+            value={provider}
+            onChange={(e) => setProvider(e.target.value)}
+          >
+            <option>Adobe Firefly</option>
+            <option>Adobe Stock</option>
+          </select>
+        </label>
+        <label className="field-label">
+          설명
+          <input
+            required
+            name="title"
+            placeholder="예: AI로 만든 한국 여행 준비 장면"
+          />
+        </label>
+        <label className="field-label">
+          영문 주제 태그
+          <input
+            required
+            name="tags"
+            placeholder="Korea travel, shopping, skincare"
+          />
+        </label>
+        {provider === "Adobe Stock" && (
+          <label className="field-label">
+            라이선스 이력·에셋 ID
+            <input
+              required
+              name="license_reference"
+              placeholder="무료 라이선스 이력의 에셋 ID 또는 참조"
+            />
+          </label>
+        )}
+        <label className="field-label">
+          원본 이미지·영상
+          <input
+            required
+            type="file"
+            name="file"
+            accept="image/jpeg,image/png,video/mp4,video/quicktime"
+          />
+        </label>
+        <button disabled={busy} className="button-primary">
+          {busy ? "저장 중…" : "미디어 등록"}
+        </button>
+        {message && <p role="status">{message}</p>}
+      </form>
+    </details>
   );
 }

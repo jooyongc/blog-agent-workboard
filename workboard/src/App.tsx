@@ -174,6 +174,7 @@ export function App() {
           <Route path="/topics" element={<Topics key={active.site_id} />} />
           <Route path="/workspaces" element={<Workspaces />} />
           <Route path="/flow" element={<Flow />} />
+          <Route path="/automation" element={<Navigate to="/flow" replace />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/queue" element={<Navigate to="/content" replace />} />
@@ -1115,6 +1116,10 @@ function Composer() {
         return;
       }
       const raw = localStorage.getItem(storageKey);
+      if (!raw) {
+        navigate("/topics", { replace: true });
+        return;
+      }
       if (raw) {
         const d = JSON.parse(raw);
         setTopic(d.topic ?? "");
