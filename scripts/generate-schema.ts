@@ -1,3 +1,4 @@
+import { safeId, timedFetch as fetch } from './_lib/runtime.js';
 /**
  * scripts/generate-schema.ts
  *
@@ -19,7 +20,7 @@ const rawArgs = process.argv.slice(2);
 const SITE_ID = resolveSiteId(rawArgs);
 const cfg = loadSiteConfig(SITE_ID);
 const positional = stripSiteArg(rawArgs);
-const SLUG = positional[0];
+const SLUG = positional[0] ? safeId(positional[0]) : '';
 if (!SLUG) {
   console.error('Usage: tsx scripts/generate-schema.ts <slug> [--site <id>]');
   process.exit(1);

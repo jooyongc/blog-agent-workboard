@@ -1,3 +1,5 @@
+import { option, timedFetch as fetch } from './_lib/runtime.js';
+import { loadSiteConfig, resolveSiteId } from './_lib/config.js';
 /**
  * scripts/weekly-auto.mts
  *
@@ -24,20 +26,16 @@ import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
-function arg(name: string): string | null {
-  const v = process.argv.find((a) => a === `--${name}` || a.startsWith(`--${name}=`))
-  if (!v) return null
-  if (v === `--${name}`) return '1'
-  return v.slice(name.length + 3)
-}
-
-const SITE_ID = arg('site') ?? 'asty-cabin'
-const LIMIT = Math.max(1, Math.min(5, Number(arg('limit') ?? 3)))
-const DRY = arg('dry-run') === '1'
-const SITE_URL = process.env.ASTY_SITE_URL || 'https://asty-cabin-check.vercel.app'
-const KEY = process.env.ASTY_AGENT_API_KEY
-
-if (!KEY) { console.error('ASTY_AGENT_API_KEY missing'); process.exit(1) }
+const args = process.argv.slice(2)
+const SITE_ID = resolveSiteId(args)
+const cfg = loadSiteConfig(SITE_ID)
+if (cfg.site_id !== 'asty-cabin') throw new Error('This legacy ASTY pipeline is not for bridge sites. Use npm run compose or bridge-import.')
+const LIMIT = Number(option(args, 'limit') ?? 3)
+if (!Number.isInteger(LIMIT) || LIMIT < 1 || LIMIT > 5) throw new Error('--limit must be an integer from 1 to 5')
+const DRY = args.includes('--dry-run')
+const SITE_URL = cfg.site_url
+const KEY = process.env[cfg.env.api_key]
+if (!KEY) throw new Error(`${cfg.env.api_key} missing`)
 
 function slugify(title: string): string {
   return title.toLowerCase()
@@ -80,8 +78,8 @@ async function recoverStaleInProgress(staleMinutes = 90): Promise<number> {
     const cutoff = Date.now() - staleMinutes * 60 * 1000
     let recovered = 0
     for (const r of j.rows) {
-      const ts = new Date(r.updated_at ?? r.created_at ?? 0).getTime()
-      if (Number.isFinite(ts) && ts > 0 && ts > cutoff) continue // still recent — leave alone
+      const ts = new Date(r.updated_at ?? r.created_at ?? '').getTime()
+      if (!Number.isFinite(ts) || ts <= 0 || ts > cutoff) continue // still recent — leave alone
       await patchTopicStatus(r.id, 'approved')
       console.log(`[weekly-auto] recovered stale in_progress → approved: ${r.title?.slice(0, 60) ?? r.id}`)
       recovered++
@@ -93,22 +91,22 @@ async function recoverStaleInProgress(staleMinutes = 90): Promise<number> {
 }
 
 async function fetchPublishedSlugs(): Promise<Set<string>> {
-  const res = await fetch(`${SITE_URL}/api/admin/posts/export?limit=50`, {
+  const res = await fetch(`${SITE_URL}/api/admin/posts/export?limit=1000`, {
     headers: { Authorization: `Bearer ${KEY}` },
   })
-  if (!res.ok) return new Set()
+  if (!res.ok) throw new Error(`Cannot check published slugs: HTTP ${res.status}`)
   const j = (await res.json()) as { posts: Array<{ slug: string }> }
   return new Set(j.posts.map((p) => p.slug))
 }
 
 async function patchTopicStatus(id: string, status: string): Promise<void> {
-  try {
-    await fetch(`${SITE_URL}/api/admin/queue/topic/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${KEY}` },
-      body: JSON.stringify({ status }),
-    })
-  } catch { /* non-fatal */ }
+  const res = await fetch(`${SITE_URL}/api/admin/queue/topic/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${KEY}` },
+    body: JSON.stringify({ status }),
+  })
+  if (!res.ok) throw new Error(`Topic status update failed: HTTP ${res.status}`)
+
 }
 
 async function main(): Promise<void> {
@@ -116,7 +114,7 @@ async function main(): Promise<void> {
 
   // Recover stale in_progress topics first — these were stuck from prior crashes
   // (GitHub Actions timeout, OOM, etc.) and would otherwise never run again.
-  const recovered = await recoverStaleInProgress(90)
+  const recovered = DRY ? 0 : await recoverStaleInProgress(90)
   if (recovered > 0) console.log(`[weekly-auto] recovered ${recovered} stale in_progress topics`)
 
   const topics = await fetchTopics()
@@ -137,6 +135,8 @@ async function main(): Promise<void> {
     console.log(`  title: ${t.title}`)
     console.log(`  category: ${t.category}`)
 
+    if (DRY) { console.log(`[dry-run] would process ${slug}`); continue }
+    if (fs.existsSync(path.join(cfg.paths.drafts, slug))) { console.log(`[review] draft already exists: ${slug}`); continue }
     await patchTopicStatus(t.id, 'in_progress')
 
     try {
@@ -146,6 +146,7 @@ async function main(): Promise<void> {
         `--slug=${slug}`,
         `--title=${t.title}`,
         `--category=${t.category}`,
+        `--site=${SITE_ID}`,
       ])
       if (!r1.ok) throw new Error(`pipeline-run exit ${r1.code}`)
 
@@ -155,10 +156,10 @@ async function main(): Promise<void> {
       }
 
       // Stage 2: translate → glossary → packager → image → schema → enqueue → publish
-      const r2 = run('npx', ['tsx', 'scripts/pipeline-chain.mts', slug])
+      const r2 = run('npx', ['tsx', 'scripts/pipeline-chain.mts', slug, `--site=${SITE_ID}`])
       if (!r2.ok) throw new Error(`pipeline-chain exit ${r2.code}`)
 
-      await patchTopicStatus(t.id, 'published')
+      await patchTopicStatus(t.id, 'approved') // draft remains for human review
       results.push({ slug, title: t.title, status: 'success' })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -172,7 +173,7 @@ async function main(): Promise<void> {
   for (const r of results) console.log(`  ${r.status.padEnd(8)} ${r.slug}${r.detail ? ` — ${r.detail}` : ''}`)
 
   // Exit non-zero only if EVERYTHING failed. One failure doesn't fail the cron.
-  const allFailed = results.length > 0 && results.every((r) => r.status === 'failed')
+  const allFailed = results.length > 0 && results.some((r) => r.status === 'failed')
   process.exit(allFailed ? 1 : 0)
 }
 

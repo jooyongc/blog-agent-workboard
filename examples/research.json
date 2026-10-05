@@ -1,0 +1,22 @@
+{
+  "en": {
+    "brief": "Replace with dated verified English-audience findings.",
+    "sources": [
+      {
+        "url": "https://english.visitkorea.or.kr/",
+        "checked_at": "2026-10-05",
+        "note": "Replace with actual page and observed facts."
+      }
+    ]
+  },
+  "ja": {
+    "brief": "日本語読者向けに別途確認した情報に置き換える。",
+    "sources": [
+      {
+        "url": "https://japanese.visitkorea.or.kr/",
+        "checked_at": "2026-10-05",
+        "note": "Replace with actual Japanese-audience evidence."
+      }
+    ]
+  }
+}

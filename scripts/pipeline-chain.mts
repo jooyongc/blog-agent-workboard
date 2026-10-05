@@ -1,3 +1,5 @@
+import { safeId, timedFetch as fetch, requireVerification } from './_lib/runtime.js';
+import { loadSiteConfig, resolveSiteId, stripSiteArg } from './_lib/config.js';
 /**
  * Given an existing draft dir with en.md only, run the rest of the pipeline:
  * translate → glossary → packager → fetch-image → schema → enqueue → publish.
@@ -9,12 +11,17 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import matter from 'gray-matter'
 
-const SLUG = process.argv[2]
+const rawArgs = process.argv.slice(2)
+const SITE_ID = resolveSiteId(rawArgs)
+const cfg = loadSiteConfig(SITE_ID)
+if (cfg.site_id !== 'asty-cabin') throw new Error('This legacy ASTY pipeline is not for bridge sites. Use npm run compose or bridge-import.')
+const SLUG = safeId(stripSiteArg(rawArgs)[0] ?? '')
 if (!SLUG) { console.error('slug required'); process.exit(1) }
-const DRAFT_DIR = path.join('content', 'drafts', SLUG)
-const SITE_URL = process.env.ASTY_SITE_URL || 'https://asty-cabin-check.vercel.app'
+const DRAFT_DIR = path.join(cfg.paths.drafts, SLUG)
+const SITE_URL = cfg.site_url
 
 function run(cmd: string, args: string[]): void {
+  args.push('--site', SITE_ID)
   const r = spawnSync(cmd, args, { stdio: 'inherit', encoding: 'utf8' })
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} exit ${r.status}`)
 }
@@ -111,6 +118,8 @@ console.log(`=== chain pipeline for ${SLUG} ===`)
 defensiveFixFrontmatter()
 stripBoldMarkers()
 
+run('npx', ['tsx', 'scripts/verify-draft.ts', SLUG])
+requireVerification(DRAFT_DIR)
 console.log('1/7 translate')
 run('npx', ['tsx', 'scripts/translate.ts', SLUG])
 
@@ -130,6 +139,8 @@ run('npx', ['tsx', 'scripts/generate-schema.ts', SLUG])
 console.log('6/7 meta_description check')
 const metaPath = path.join(DRAFT_DIR, 'meta.json')
 const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')) as {
+  category?: string
+  publish_at?: string
   translations: Record<string, { title: string; meta_description: string; tags: string[] }>
 }
 const padByLang: Record<string, string> = {
@@ -149,6 +160,9 @@ for (const lang of ['en', 'ja', 'zh-hans']) {
 if (changed) fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2))
 
 // --- Enqueue + publish ---
+if (!rawArgs.includes('--publish')) { console.log('✓ Draft ready for human review; no external writes'); process.exit(0) }
+const { requireReview } = await import('./_lib/runtime.js')
+requireReview(DRAFT_DIR)
 console.log('7/7 enqueue + publish')
 const enMd = fs.readFileSync(path.join(DRAFT_DIR, 'en.md'), 'utf8').replace(/^---[\s\S]*?---/, '').trim()
 const jaMd = fs.readFileSync(path.join(DRAFT_DIR, 'ja.md'), 'utf8').replace(/^---[\s\S]*?---/, '').trim()
@@ -161,14 +175,14 @@ const factPct = ver.claims_total > 0 ? (ver.summary.verified / ver.claims_total)
 const citability = typeof ver.citability_score === 'number' ? ver.citability_score : 60
 const qs = Math.round(factPct * 0.6 + citability * 0.4)
 
-const key = process.env.ASTY_AGENT_API_KEY
+const key = process.env[cfg.env.api_key]
 if (!key) throw new Error('ASTY_AGENT_API_KEY missing')
 
 const enqueueRes = await fetch(`${SITE_URL}/api/admin/queue/enqueue`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
   body: JSON.stringify({
-    site_id: 'asty-cabin',
+    site_id: SITE_ID,
     slug: SLUG,
     draft_path: DRAFT_DIR,
     category: meta.category ?? 'culture',
@@ -184,6 +198,7 @@ const enqueueRes = await fetch(`${SITE_URL}/api/admin/queue/enqueue`, {
     initial_status: 'approved',
   }),
 })
+if (!enqueueRes.ok) throw new Error(`enqueue failed HTTP ${enqueueRes.status}`)
 console.log(`  enqueue: HTTP ${enqueueRes.status}`)
 
 run('npx', ['tsx', 'scripts/publish.ts', SLUG])

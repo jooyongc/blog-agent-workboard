@@ -1,3 +1,4 @@
+import { safeId, timedFetch as fetch } from './_lib/runtime.js';
 /**
  * scripts/verify-draft.ts
  *
@@ -26,7 +27,7 @@ const rawArgs = process.argv.slice(2);
 const SITE_ID = resolveSiteId(rawArgs);
 const cfg = loadSiteConfig(SITE_ID);
 const positional = stripSiteArg(rawArgs);
-const SLUG = positional[0];
+const SLUG = positional[0] ? safeId(positional[0]) : '';
 
 if (!SLUG) {
   console.error('Usage: tsx scripts/verify-draft.ts <slug> [--site <id>]');
@@ -43,17 +44,8 @@ if (!fs.existsSync(EN_PATH)) {
 }
 
 if (!fs.existsSync(VERIFICATION_PATH)) {
-  console.warn(`[verify] No verification.json found at ${VERIFICATION_PATH}`);
-  console.warn('[verify] The verifier subagent must run before this script.');
-  console.warn('[verify] Marking draft verification_status=skipped and continuing.');
-
-  // Still update frontmatter so downstream knows this was intentional
-  const raw = fs.readFileSync(EN_PATH, 'utf8');
-  const parsed = matter(raw);
-  const fm = { ...parsed.data, verification_status: 'skipped', verification_summary: null };
-  fs.writeFileSync(EN_PATH, matter.stringify(parsed.content, fm));
-  console.log('[verify] skipped');
-  process.exit(0);
+  console.error('[verify] Missing verification.json — run verification before continuing');
+  process.exit(2);
 }
 
 type VerificationReport = {
@@ -82,7 +74,7 @@ try {
 
 // Normalize status (defensive against agent output variance)
 const ALLOWED = ['verified', 'partial', 'blocked'] as const;
-const status = ALLOWED.includes(report.overall_status as typeof ALLOWED[number])
+const status = report.summary?.contradicted > 0 ? 'blocked' : ALLOWED.includes(report.overall_status as typeof ALLOWED[number])
   ? report.overall_status
   : 'partial';
 

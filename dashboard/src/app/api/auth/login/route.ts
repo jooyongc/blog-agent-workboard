@@ -16,13 +16,13 @@ export async function POST(req: NextRequest) {
   const secret = process.env.DASHBOARD_SESSION_SECRET ?? ''
 
   if (!expected || !secret) {
-    return NextResponse.redirect(new URL('/login?error=server', req.url))
+    return NextResponse.redirect(new URL('/login?error=server', req.url), 303)
   }
   if (!safeCompare(password, expected)) {
-    return NextResponse.redirect(new URL('/login?error=wrong', req.url))
+    return NextResponse.redirect(new URL('/login?error=wrong', req.url), 303)
   }
 
-  const res = NextResponse.redirect(new URL('/', req.url))
+  const res = NextResponse.redirect(new URL('/', req.url), 303)
   res.cookies.set('dash_session', secret, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',

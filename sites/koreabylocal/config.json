@@ -1,0 +1,38 @@
+{
+  "site_id": "koreabylocal",
+  "site_url": "https://koreabylocal.com",
+  "env": {
+    "api_key": "SUPABASE_SERVICE_ROLE_KEY"
+  },
+  "languages": [
+    "en"
+  ],
+  "canonical_lang": "en",
+  "categories": [
+    "NEWS",
+    "LOCALS",
+    "KOREAN",
+    "K-CULTURE"
+  ],
+  "paths": {
+    "glossary_dir": "glossary",
+    "topic_queue": "topics/koreabylocal.md",
+    "voice_guide": "sites/koreabylocal/VOICE.md",
+    "drafts": "content/koreabylocal/drafts",
+    "published": "content/koreabylocal/published"
+  },
+  "budget": {
+    "deepl_chars_per_run": 40000,
+    "deepl_chars_monthly": 450000
+  },
+  "bridge": {
+    "adapter": "supabase",
+    "url_env": "BRIDGE_SUPABASE_URL",
+    "key_env": "SUPABASE_SERVICE_ROLE_KEY",
+    "schema": "koreabylocal",
+    "table": "blog_posts",
+    "languages": [
+      "en"
+    ]
+  }
+}

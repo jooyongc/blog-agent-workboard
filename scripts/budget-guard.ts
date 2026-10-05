@@ -1,3 +1,4 @@
+import { timedFetch as fetch } from './_lib/runtime.js';
 /**
  * scripts/budget-guard.ts
  *
@@ -40,8 +41,8 @@ if (!key) { console.error(`${cfg.env.api_key} missing`); process.exit(1) }
   })
   if (!res.ok) {
     console.error(`[budget-guard] HTTP ${res.status} from ${url}`)
-    console.error('[budget-guard] Assuming OK — do not block pipeline on metric fetch failure.')
-    process.exit(0)
+    console.error('[budget-guard] Cannot verify spend — stopping.')
+    process.exit(1)
   }
   const data = await res.json() as {
     budget: { month_to_date_usd: number; calls_this_month: number }
@@ -53,7 +54,7 @@ if (!key) { console.error(`${cfg.env.api_key} missing`); process.exit(1) }
   console.log(`[budget-guard] site=${cfg.site_id} profile=${profile}`)
   console.log(`[budget-guard] month-to-date: $${mtd.toFixed(4)} / $${ceiling.toFixed(2)} (${pct.toFixed(1)}%, ${calls} calls)`)
 
-  if (mtd > ceiling) {
+  if (mtd >= ceiling) {
     console.error(`[budget-guard] OVER LIMIT — halting cycle`)
     process.exit(3)
   }
@@ -63,6 +64,5 @@ if (!key) { console.error(`${cfg.env.api_key} missing`); process.exit(1) }
   process.exit(0)
 })().catch(e => {
   console.error(`[budget-guard] ${e instanceof Error ? e.message : e}`)
-  // Fail-open: cost fetch issues should not block pipeline
-  process.exit(0)
+  process.exit(1)
 })

@@ -7,6 +7,7 @@
  */
 
 import * as fs from 'fs';
+import { safeId, option } from './runtime.js';
 import * as path from 'path';
 
 export type SiteConfig = {
@@ -38,12 +39,7 @@ export type SiteConfig = {
  * Parse --site=<id> or --site <id> from process.argv. Returns null if absent.
  */
 export function parseSiteArg(argv: string[]): string | null {
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === '--site' && argv[i + 1]) return argv[i + 1];
-    if (a.startsWith('--site=')) return a.slice('--site='.length);
-  }
-  return null;
+  return option(argv, 'site') ?? null;
 }
 
 /**
@@ -73,15 +69,18 @@ export function stripSiteArg(argv: string[]): string[] {
  * so legacy repo layouts continue to work without changes.
  */
 export function loadSiteConfig(siteId?: string): SiteConfig {
-  const id = siteId ?? 'asty-cabin';
+  const id = safeId(siteId ?? 'asty-cabin', 'site ID');
   const configPath = path.join('sites', id, 'config.json');
 
   if (fs.existsSync(configPath)) {
     const raw = JSON.parse(fs.readFileSync(configPath, 'utf8')) as SiteConfig;
     validate(raw);
+    if (raw.site_id !== id) throw new Error('[config] site_id does not match directory');
+    if (id === 'asty-cabin' && process.env.ASTY_SITE_URL) raw.site_url = process.env.ASTY_SITE_URL;
     return raw;
   }
 
+  if (id !== 'asty-cabin') throw new Error(`[config] Unknown site: ${id}`);
   // Legacy fallback: assume single-site repo layout
   return {
     site_id: 'asty-cabin',
@@ -111,6 +110,11 @@ export function loadSiteConfig(siteId?: string): SiteConfig {
 
 function validate(cfg: SiteConfig): void {
   const missing: string[] = [];
+  safeId(cfg.site_id, 'site ID');
+  const url = new URL(cfg.site_url);
+  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('[config] Invalid site URL');
+  if (!Array.isArray(cfg.languages) || !cfg.languages.includes(cfg.canonical_lang) || new Set(cfg.languages).size !== cfg.languages.length) throw new Error('[config] Invalid languages/canonical_lang');
+  for (const value of Object.values(cfg.budget ?? {})) if (typeof value === 'number' && (!Number.isFinite(value) || value <= 0)) throw new Error('[config] Invalid budget');
   if (!cfg.site_id) missing.push('site_id');
   if (!cfg.site_url) missing.push('site_url');
   if (!cfg.env?.api_key) missing.push('env.api_key');
@@ -138,9 +142,9 @@ export function requireEnv(name: string, context: string): string {
  * Convenience: get the draft directory for a slug under a given config.
  */
 export function draftDir(cfg: SiteConfig, slug: string): string {
-  return path.join(cfg.paths.drafts, slug);
+  return path.join(cfg.paths.drafts, safeId(slug));
 }
 
 export function publishedDir(cfg: SiteConfig, slug: string): string {
-  return path.join(cfg.paths.published, slug);
+  return path.join(cfg.paths.published, safeId(slug));
 }

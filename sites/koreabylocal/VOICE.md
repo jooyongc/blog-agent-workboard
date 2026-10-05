@@ -1,0 +1,1 @@
+Korea by Local is a local experiences and culture guide for foreign visitors. Write useful English with specific, sourced information. No ASTY Cabin promotion. Use a concise introduction, practical sections and FAQ. Category must be NEWS, LOCALS, KOREAN or K-CULTURE.

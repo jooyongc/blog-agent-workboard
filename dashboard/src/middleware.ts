@@ -13,6 +13,7 @@ export function middleware(req: NextRequest) {
   const session = req.cookies.get(SESSION_COOKIE)?.value
   const authed = Boolean(secret && session === secret)
   if (!authed) {
+    if (pathname.startsWith('/api/')) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     const url = req.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)

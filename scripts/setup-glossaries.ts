@@ -26,7 +26,7 @@ const DEEPL_SRC_MAP: Record<string, deepl.SourceLanguageCode> = {
   ko: 'ko', fr: 'fr', de: 'de', es: 'es', it: 'it',
 };
 const DEEPL_TGT_MAP: Record<string, deepl.TargetLanguageCode> = {
-  en: 'en-US', ja: 'ja', 'zh-hans': 'zh-Hans', 'zh-hant': 'zh-Hant',
+  en: 'en-US', ja: 'ja', 'zh-hans': 'zh-HANS', 'zh-hant': 'zh-HANT',
   ko: 'ko', fr: 'fr', de: 'de', es: 'es', it: 'it',
 };
 

@@ -31,10 +31,15 @@ export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as {
     limit?: number
     dry_run?: boolean
+    site_id?: string
   } | null
 
-  const limit = Math.max(1, Math.min(5, body?.limit ?? 3))
-  const dryRun = Boolean(body?.dry_run)
+  const limit = body?.limit ?? 3
+  const dryRun = body?.dry_run ?? true
+  const siteId = body?.site_id ?? 'asty-cabin'
+  if (!Number.isInteger(limit) || limit < 1 || limit > 5 || typeof dryRun !== 'boolean' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(siteId)) {
+    return NextResponse.json({ error: 'Invalid limit, dry_run or site_id' }, { status: 400 })
+  }
 
   const res = await fetch(
     `https://api.github.com/repos/${repo}/actions/workflows/${workflow}/dispatches`,
@@ -48,7 +53,7 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         ref: 'main',
-        inputs: { limit: String(limit), dry_run: String(dryRun) },
+        inputs: { limit: String(limit), dry_run: String(dryRun), site_id: siteId },
       }),
     },
   )
@@ -56,7 +61,7 @@ export async function POST(req: NextRequest) {
   if (res.status === 204) {
     return NextResponse.json({
       ok: true,
-      message: '파이프라인 실행 요청됨. GitHub Actions에서 약 3-5분 내 완료.',
+      message: '파이프라인 실행 요청됨. GitHub Actions에서 진행 상태와 결과를 확인하세요.',
       runs_url: `https://github.com/${repo}/actions/workflows/${workflow}`,
       limit,
       dry_run: dryRun,

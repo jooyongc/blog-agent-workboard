@@ -1,0 +1,24 @@
+{
+  "slug": "sample-korea-guide",
+  "category": "practical",
+  "translations": {
+    "en": {
+      "title": "Sample Korea Guide",
+      "meta_description": "Replace this sample with independently researched content.",
+      "tags": [
+        "Travel"
+      ],
+      "authoring_mode": "independent",
+      "content_md": "## Sample\n\nReplace this with reviewed English content."
+    },
+    "ja": {
+      "title": "韓国ガイドのサンプル",
+      "meta_description": "独自に調査した内容に置き換えてください。",
+      "tags": [
+        "Travel"
+      ],
+      "authoring_mode": "independent",
+      "content_md": "## サンプル\n\n独自に調査した日本語の記事に置き換えてください。"
+    }
+  }
+}

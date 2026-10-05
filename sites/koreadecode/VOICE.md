@@ -1,0 +1,1 @@
+Korea Decode interprets Korean culture and trends for English readers. Explain context, use evidence, and distinguish fact from opinion. No ASTY Cabin promotion. Include practical sections and FAQ. Prices, rankings and dates require sources.

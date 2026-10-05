@@ -1,0 +1,40 @@
+{
+  "site_id": "koreadecode",
+  "site_url": "https://koreadecode.com",
+  "env": {
+    "api_key": "SUPABASE_SERVICE_ROLE_KEY"
+  },
+  "languages": [
+    "en"
+  ],
+  "canonical_lang": "en",
+  "categories": [
+    "News",
+    "K-Pop",
+    "K-Beauty",
+    "K-Food",
+    "Travel",
+    "Culture"
+  ],
+  "paths": {
+    "glossary_dir": "glossary",
+    "topic_queue": "topics/koreadecode.md",
+    "voice_guide": "sites/koreadecode/VOICE.md",
+    "drafts": "content/koreadecode/drafts",
+    "published": "content/koreadecode/published"
+  },
+  "budget": {
+    "deepl_chars_per_run": 40000,
+    "deepl_chars_monthly": 450000
+  },
+  "bridge": {
+    "adapter": "supabase",
+    "url_env": "BRIDGE_SUPABASE_URL",
+    "key_env": "SUPABASE_SERVICE_ROLE_KEY",
+    "schema": "public",
+    "table": "posts",
+    "languages": [
+      "en"
+    ]
+  }
+}

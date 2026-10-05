@@ -1,3 +1,4 @@
+import { requireReview, requireVerification, safeId, timedFetch as fetch } from './_lib/runtime.js';
 /**
  * scripts/publish.ts
  *
@@ -21,7 +22,7 @@ const rawArgs = process.argv.slice(2);
 const SITE_ID = resolveSiteId(rawArgs);
 const cfg = loadSiteConfig(SITE_ID);
 const positional = stripSiteArg(rawArgs);
-const SLUG = positional[0];
+const SLUG = positional[0] ? safeId(positional[0]) : '';
 if (!SLUG) {
   console.error('Usage: tsx scripts/publish.ts <slug> [--site <id>]');
   process.exit(1);
@@ -44,6 +45,10 @@ function readLang(file: string) {
 }
 
 async function run() {
+  requireVerification(DRAFT_DIR);
+  requireReview(DRAFT_DIR);
+  if (fs.existsSync(PUBLISHED_DIR)) throw new Error('Already archived; reconcile remote state before publishing');
+  if (fs.existsSync(path.join(DRAFT_DIR, 'publish-attempt.json'))) throw new Error('Previous publish attempt exists; reconcile remote result before retrying');
   const meta = JSON.parse(fs.readFileSync(path.join(DRAFT_DIR, 'meta.json'), 'utf8'));
   const en = readLang('en.md');
   const ja = readLang('ja.md');
@@ -77,6 +82,10 @@ async function run() {
     );
   }
 
+  if (meta.slug !== SLUG) throw new Error('meta.slug does not match draft directory');
+  if (!cfg.categories.includes(meta.category)) throw new Error('Invalid category');
+  const scheduled = Date.parse(meta.publish_at);
+  if (!Number.isFinite(scheduled) || scheduled < Date.now() + 2 * 3600000) throw new Error('publish_at must be at least 2 hours in the future');
   const payload = {
     slug: meta.slug,
     category: meta.category,
@@ -113,6 +122,7 @@ async function run() {
 
   console.log(`→ POST ${SITE}/api/admin/posts/multilang  (slug: ${meta.slug})`);
 
+  fs.writeFileSync(path.join(DRAFT_DIR, 'publish-attempt.json'), JSON.stringify({ slug: SLUG, started_at: new Date().toISOString() }), { flag: 'wx' });
   const res = await fetch(`${SITE}/api/admin/posts/multilang`, {
     method: 'POST',
     headers: {
@@ -128,6 +138,7 @@ async function run() {
   }
 
   const result = await res.json();
+  fs.writeFileSync(path.join(DRAFT_DIR, 'publish-receipt.json'), JSON.stringify({ received_at: new Date().toISOString(), result }, null, 2));
   console.log('✓ Published:');
   console.log(`  EN: ${SITE}/en/blog/${meta.slug}`);
   console.log(`  JA: ${SITE}/ja/blog/${meta.slug}`);

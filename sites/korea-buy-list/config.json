@@ -1,0 +1,40 @@
+{
+  "site_id": "korea-buy-list",
+  "site_url": "https://koreabuylist.blogspot.com",
+  "env": {
+    "api_key": "BLOGGER_ACCESS_TOKEN"
+  },
+  "languages": [
+    "en",
+    "ja"
+  ],
+  "canonical_lang": "en",
+  "categories": [
+    "shopping",
+    "stays",
+    "transport",
+    "practical"
+  ],
+  "paths": {
+    "glossary_dir": "glossary",
+    "topic_queue": "topics/korea-buy-list.md",
+    "voice_guide": "sites/korea-buy-list/VOICE.md",
+    "drafts": "content/korea-buy-list/drafts",
+    "published": "content/korea-buy-list/published"
+  },
+  "budget": {
+    "deepl_chars_per_run": 40000,
+    "deepl_chars_monthly": 450000
+  },
+  "bridge": {
+    "adapter": "blogger",
+    "blog_id": "2501831991285091849",
+    "owner": "aside-browser",
+    "languages": [
+      "en",
+      "ja"
+    ],
+    "runbook": "/Users/project.adv/1000project/korea-buy-list/RUNBOOK.md",
+    "routine_id": "cisZ0evksgQuTweq"
+  }
+}

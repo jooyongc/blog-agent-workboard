@@ -1,66 +1,65 @@
 name: Weekly Pipeline
-
 on:
   schedule:
-    # Every Monday 06:00 KST = Sunday 21:00 UTC
     - cron: '0 21 * * 0'
   workflow_dispatch:
     inputs:
       limit:
-        description: 'Max number of topics to process (1-5)'
-        required: false
+        description: 'Topics to prepare (1-5)'
         default: '3'
+      site_id:
+        description: 'Legacy pipeline site (ASTY trilingual only)'
+        default: 'asty-cabin'
       dry_run:
-        description: 'Stop after Writer (no publish)'
-        required: false
+        description: 'Read-only preflight; no paid generation or state changes'
         type: boolean
-        default: false
-
+        default: true
+permissions:
+  contents: read
 concurrency:
   group: weekly-pipeline
   cancel-in-progress: false
-
 jobs:
   run:
+    if: github.event_name == 'workflow_dispatch' || vars.BLOG_PIPELINE_ENABLED == 'true'
     runs-on: ubuntu-latest
-    # Each topic takes 8-15 min through the full pipeline (SEO+writer+verifier+
-    # translate+glossary+packager+image+schema+publish). 3 topics × ~15 min +
-    # buffer for npm install and Anthropic latency = 75 min ceiling.
-    timeout-minutes: 75
-
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
-
-      - name: Run weekly-auto pipeline
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck && npm test && npm run validate-configs
+      - uses: actions/cache/restore@v4
+        with:
+          path: content/
+          key: blog-content-${{ github.run_id }}
+          restore-keys: blog-content-
+      - name: Prepare drafts (no publication)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ASTY_AGENT_API_KEY: ${{ secrets.ASTY_AGENT_API_KEY }}
           DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
           UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
           ASTY_SITE_URL: ${{ secrets.ASTY_SITE_URL || 'https://asty-cabin-check.vercel.app' }}
+          PIPELINE_LIMIT: ${{ inputs.limit || '3' }}
+          PIPELINE_SITE: ${{ inputs.site_id || 'asty-cabin' }}
+          PIPELINE_DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          ARGS="--site=asty-cabin --limit=${{ inputs.limit || '3' }}"
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            ARGS="$ARGS --dry-run"
-          fi
-          echo "Running: npx tsx scripts/weekly-auto.mts $ARGS"
-          npx tsx scripts/weekly-auto.mts $ARGS
-
-      - name: Upload drafts (if any)
+          args=("--site=$PIPELINE_SITE" "--limit=$PIPELINE_LIMIT")
+          if [ "$PIPELINE_DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          npx tsx scripts/weekly-auto.mts "${args[@]}"
+      - uses: actions/cache/save@v4
         if: always()
-        uses: actions/upload-artifact@v4
+        with:
+          path: content/
+          key: blog-content-${{ github.run_id }}
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: weekly-drafts-${{ github.run_id }}
-          path: |
-            content/drafts/
-            content/published/
+          path: content/
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 30

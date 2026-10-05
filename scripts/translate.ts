@@ -1,3 +1,5 @@
+import { budgetedMessage } from './_lib/llm.js';
+import { safeId, timedFetch as fetch } from './_lib/runtime.js';
 /**
  * scripts/translate.ts
  *
@@ -30,7 +32,7 @@ const SITE_ID = resolveSiteId(rawArgs);
 const cfg = loadSiteConfig(SITE_ID);
 
 const positional = stripSiteArg(rawArgs);
-const SLUG = positional[0];
+const SLUG = positional[0] ? safeId(positional[0]) : '';
 if (!SLUG) {
   console.error('Usage: tsx scripts/translate.ts <slug> [--site <id>]');
   process.exit(1);
@@ -62,7 +64,7 @@ if (!HAS_DEEPL) {
 // Translator instance is only used when HAS_DEEPL is true. We construct with
 // an empty string when missing to keep types simple; the code paths gate on
 // HAS_DEEPL / deeplLikelyOk before calling it.
-const translator = new deepl.Translator(process.env.DEEPL_API_KEY ?? 'x-deepl-not-configured');
+const translator = new deepl.Translator(process.env.DEEPL_API_KEY ?? 'x-deepl-not-configured', { maxRetries: 0 });
 
 // ---- Monthly usage tracking ----
 type UsageLog = { month: string; chars: number; runs: number };
@@ -126,8 +128,8 @@ type Target = {
 
 const LANG_NAME: Record<string, string> = {
   'ja': 'Japanese (natural conversational style, polite -ます/です forms)',
-  'zh-Hans': 'Simplified Chinese (Mainland Mandarin, 简体字 only — never 繁体)',
-  'zh-Hant': 'Traditional Chinese',
+  'zh-HANS': 'Simplified Chinese (Mainland Mandarin, 简体字 only — never 繁体)',
+  'zh-HANT': 'Traditional Chinese',
   'ko': 'Korean',
   'fr': 'French',
   'de': 'German',
@@ -185,16 +187,17 @@ async function translateWithHaiku(opts: {
   if (!apiKey) {
     throw new Error('Haiku fallback requires ANTHROPIC_API_KEY')
   }
-  const client = new Anthropic({ apiKey })
+  const client = new Anthropic({ apiKey, maxRetries: 0, timeout: 120000 })
   const system = buildHaikuSystemPrompt(opts.targetLang, opts.glossary)
 
   async function call(prompt: string, maxTokens: number): Promise<string> {
-    const msg = await client.messages.create({
+    const msg = await budgetedMessage(client, cfg, SLUG, 'translation', {
       model: 'claude-haiku-4-5',
       max_tokens: maxTokens,
       system,
       messages: [{ role: 'user', content: prompt }],
     })
+    if (msg.stop_reason === 'max_tokens') throw new Error('Translation truncated');
     const block = msg.content[0]
     if (block.type !== 'text') throw new Error('Haiku returned non-text block')
     return block.text.trim()
@@ -225,8 +228,8 @@ function isQuotaError(e: unknown): boolean {
 // Source of truth: site config `languages` array (excludes canonical_lang).
 const DEEPL_LANG_MAP: Record<string, { deepl: deepl.TargetLanguageCode; file: string }> = {
   ja: { deepl: 'ja', file: 'ja.md' },
-  'zh-hans': { deepl: 'zh-Hans', file: 'zh.md' },
-  'zh-hant': { deepl: 'zh-Hant', file: 'zh.md' },
+  'zh-hans': { deepl: 'zh-HANS', file: 'zh.md' },
+  'zh-hant': { deepl: 'zh-HANT', file: 'zh.md' },
   ko: { deepl: 'ko', file: 'ko.md' },
   fr: { deepl: 'fr', file: 'fr.md' },
   de: { deepl: 'de', file: 'de.md' },
@@ -257,10 +260,12 @@ async function run() {
   const metaEn = fm.meta_description as string;
 
   // ---- Pre-flight ----
+  if (!titleEn || !metaEn || !content.trim()) throw new Error('Source requires title, meta_description and body');
   const sourceLen = content.length + titleEn.length + metaEn.length;
   const totalChars = sourceLen * targets.length;
   console.log(`[budget] source=${sourceLen} chars, × ${targets.length} langs = ${totalChars}`);
 
+  if (![MAX_PER_RUN, MAX_MONTHLY].every(n => Number.isFinite(n) && n > 0)) throw new Error('Invalid translation budget');
   if (totalChars > MAX_PER_RUN) {
     console.error(`[budget] ABORT — ${totalChars} chars exceeds per-run cap ${MAX_PER_RUN}`);
     process.exit(2);
@@ -301,6 +306,9 @@ async function run() {
 
     if (deeplLikelyOk) {
       try {
+        usage.chars += sourceLen;
+        usage.runs += 1;
+        saveUsage(usage); // reserve before request: partial failures may be billable
         const [bodyRes, titleRes, metaRes] = await Promise.all([
           translator.translateText(protectedText, 'en', t.lang, {
             tagHandling: 'html',
@@ -334,7 +342,8 @@ async function run() {
       // to leave placeholders alone in the system prompt anyway, so protection
       // still works to keep code/URLs intact, but Haiku can read the source
       // either way; we use the protected one to keep code blocks 100% safe.
-      const langKey = t.lang === 'zh-Hans' ? 'zh' : 'ja';
+      if (process.env.ALLOW_LLM_TRANSLATION_FALLBACK !== 'true') throw new Error('DeepL unavailable. Paid fallback requires ALLOW_LLM_TRANSLATION_FALLBACK=true');
+      const langKey = t.lang === 'zh-HANS' ? 'zh' : t.lang === 'zh-HANT' ? 'zh-hant' : t.lang;
       const glossaryPath = path.join(cfg.paths.glossary_dir, `${langKey}.csv`);
       const glossary = loadGlossaryCsv(glossaryPath);
       const out = await translateWithHaiku({
@@ -353,7 +362,7 @@ async function run() {
 
     const outFm = {
       ...fm,
-      lang: t.lang === 'zh-Hans' ? 'zh-hans' : 'ja',
+      lang: t.lang === 'zh-HANS' ? 'zh-hans' : t.lang === 'zh-HANT' ? 'zh-hant' : t.lang,
       title: translatedTitle,
       meta_description: translatedMeta,
       translation_review: 'pending',
@@ -366,8 +375,6 @@ async function run() {
   }
 
   if (totalCharsCharged > 0) {
-    usage.chars += totalCharsCharged;
-    usage.runs += 1;
     saveUsage(usage);
     console.log(`\n[budget] Monthly DeepL: ${usage.chars}/${MAX_MONTHLY} chars, ${usage.runs} runs (this run charged ${totalCharsCharged})`);
   } else {

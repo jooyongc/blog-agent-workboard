@@ -114,7 +114,8 @@ function readFilesystemSites(): SiteConfig[] {
       if (!fs.existsSync(cfgPath)) continue
       try {
         const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8')) as SiteConfig
-        result.push(cfg)
+        // Bridge targets use their native storage adapters, not ASTY admin endpoints.
+        if (!('bridge' in cfg)) result.push(cfg)
       } catch {
         // skip invalid configs
       }

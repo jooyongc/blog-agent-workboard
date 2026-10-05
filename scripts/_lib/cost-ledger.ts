@@ -1,3 +1,4 @@
+import { timedFetch as fetch } from './runtime.js';
 /**
  * scripts/_lib/cost-ledger.ts
  *
@@ -24,7 +25,7 @@ export function computeCostUsd(
   outputTokens: number,
 ): number {
   const p = PRICING[model]
-  if (!p) return 0
+  if (!p) throw new Error(`Unknown model pricing: ${model}`)
   return (inputTokens * p.input) / 1_000_000 + (outputTokens * p.output) / 1_000_000
 }
 

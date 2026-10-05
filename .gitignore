@@ -11,3 +11,12 @@ dist/
 
 # Deployment secrets (includes DASHBOARD_MASTER_KEY)
 docs/multi-blog-monetization/workspaces/DEPLOYMENT-SECRETS.md
+
+/outbox/
+content/.llm-budget.json*
+content/**/.deepl-usage.json
+**/node_modules/
+**/.env.local*
+dashboard/.next/
+dashboard/next-env.d.ts
+dashboard/tsconfig.tsbuildinfo

@@ -1,3 +1,6 @@
+import { budgetedMessage } from './_lib/llm.js';
+import { safeId } from './_lib/runtime.js';
+import { loadSiteConfig, resolveSiteId } from './_lib/config.js';
 /**
  * End-to-end pipeline for a single topic.
  * Usage: tsx scripts/pipeline-run.mts --slug=<slug> --title="..." --category=<cat>
@@ -14,7 +17,9 @@ function arg(name: string): string | null {
   return m ? m.slice(name.length + 3) : null
 }
 
-const SLUG = arg('slug') ?? ''
+const cfg = loadSiteConfig(resolveSiteId(process.argv.slice(2)))
+if (cfg.site_id !== 'asty-cabin') throw new Error('This legacy ASTY pipeline is not for bridge sites. Use npm run compose or bridge-import.')
+const SLUG = safeId(arg('slug') ?? '')
 const TOPIC = arg('title') ?? ''
 const CATEGORY = arg('category') ?? ''
 if (!SLUG || !TOPIC || !CATEGORY) {
@@ -22,18 +27,19 @@ if (!SLUG || !TOPIC || !CATEGORY) {
   process.exit(1)
 }
 
-const DRAFT_DIR = path.join('content', 'drafts', SLUG)
+const DRAFT_DIR = path.join(cfg.paths.drafts, SLUG)
 fs.mkdirSync(DRAFT_DIR, { recursive: true })
 
-const client = new Anthropic()
+const client = new Anthropic({ maxRetries: 0, timeout: 120000 })
 const totals: Record<string, { in: number; out: number }> = {}
 
 async function callHaiku(label: string, system: string, user: string, max = 4000): Promise<string> {
   const t0 = Date.now()
-  const r = await client.messages.create({
+  const r = await budgetedMessage(client, cfg, SLUG, label, {
     model: 'claude-haiku-4-5', max_tokens: max, system,
     messages: [{ role: 'user', content: user }],
   })
+  if (r.stop_reason === 'max_tokens') throw new Error(`${label}: truncated output`);
   const b = r.content[0]
   if (b.type !== 'text') throw new Error(`${label}: non-text`)
   totals[label] = { in: r.usage.input_tokens, out: r.usage.output_tokens }
@@ -95,7 +101,7 @@ console.log('Step 2: Writer')
 const writerText = await callHaiku(
   'writer',
   loadPrompt('writer') + '\n\nCRITICAL: No tools. Return ONLY the article markdown with YAML frontmatter. Skip web_search; hedge unverified claims.',
-  JSON.stringify({ topic: TOPIC, primary_keyword: seoJson.primary_keyword, secondary_keywords: seoJson.secondary_keywords, slug: SLUG, category: CATEGORY, site_voice_guide: fs.readFileSync('CLAUDE.md', 'utf8') }),
+  JSON.stringify({ topic: TOPIC, primary_keyword: seoJson.primary_keyword, secondary_keywords: seoJson.secondary_keywords, slug: SLUG, category: CATEGORY, site_voice_guide: fs.readFileSync(cfg.paths.voice_guide, 'utf8') }),
   8000,
 )
 let enMd = extractMarkdown(writerText)
@@ -123,6 +129,9 @@ const verJson = extractJson<{
   citability_score?: number
   citability_band?: string
 }>(verText)
+// A tool-free model cannot establish external facts. Human review remains required.
+if (verJson.overall_status === 'verified') verJson.overall_status = 'partial'
+if (verJson.summary?.contradicted > 0) verJson.overall_status = 'blocked'
 // Belt-and-suspenders: enforce 'partial' downgrade when citability is weak,
 // in case the LLM forgot to apply the rule itself. 'blocked' (contradicted
 // claims) always wins over 'partial'.

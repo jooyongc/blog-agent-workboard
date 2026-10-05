@@ -1,0 +1,12 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { loadSiteConfig, resolveSiteId, stripSiteArg } from './_lib/config.js';
+import { safeId, reviewHash, requireVerification } from './_lib/runtime.js';
+const args = process.argv.slice(2);
+const cfg = loadSiteConfig(resolveSiteId(args));
+const slug = safeId(stripSiteArg(args)[0] ?? '');
+if (!args.includes('--reviewed')) throw new Error('Read the draft and verification report, then pass --reviewed');
+const dir = path.join(cfg.paths.drafts, slug);
+requireVerification(dir);
+fs.writeFileSync(path.join(dir, 'approval.json'), JSON.stringify({ hash: reviewHash(dir), reviewed_at: new Date().toISOString() }, null, 2));
+console.log(`Approved current draft: ${slug}`);

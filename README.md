@@ -1,3 +1,15 @@
+# Blog Agent — Multi-site Bridge
+
+2026-10-05 복구 버전. 운영 대상은 Korea Buy List(Blogger, EN/JA), Korea by Local(EN), Korea Decode(EN)입니다. 기존 ASTY 파이프라인은 별도 유지합니다.
+
+[운영 가이드](docs/OPERATIONS.md) · [전체 점검 기록](docs/AUDIT-2026-10-05.md) · [aside 연결](docs/ASIDE-BRIDGE-HANDOFF.md)
+
+Node 22.12+에서 `nvm use`, `npm ci`, `npm run typecheck`, `npm test`로 시작합니다. 실제 생성 및 전송 절차는 운영 가이드를 따릅니다. 새 브릿지는 기본적으로 bundle 생성 또는 원격 초안 저장이며 공개 게시는 기존 관리 화면에서 진행합니다.
+
+아래는 기존 ASTY 설계 기록입니다. 비용 예상·자동화·예전 quick-start 설명은 현재 운영 가이드를 우선합니다.
+
+---
+
 # ASTY Cabin Blog Agent — Lean Edition
 
 **Monthly budget: under $10.** Actual expected spend: **$3–$5/month** for 12 posts.

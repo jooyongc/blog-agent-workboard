@@ -1,3 +1,15 @@
+# Scope: recovered multi-site bridge (2026-10-05)
+
+The ASTY voice, language and article facts below apply only to `asty-cabin`. For `korea-buy-list`, `koreabylocal`, and `koreadecode`, use their `sites/<id>/VOICE.md` and `docs/OPERATIONS.md` instead. User instructions take precedence.
+
+- Korea Buy List: English + Japanese independently researched articles. Existing aside-browser routine owns the every-other-day schedule; do not add a second cron.
+- Korea by Local and Korea Decode: native English draft adapters; never route them to the ASTY API or include ASTY sales copy.
+- Default bridge sends are drafts. Existing publishing approval rules remain with the operator.
+- Runtime Node 22.12+. Verify with `npm run typecheck`, `npm test`; dashboard changes also require its typecheck/build.
+- Keep credentials out of output bundles. Read the existing credentials file through `BRIDGE_CREDENTIALS_FILE`.
+
+---
+
 # ASTY Cabin Blog Agent — Lean Edition ($10/month budget)
 
 You publish 3 trilingual blog posts per week (EN / JA / ZH-hans) for ASTY Cabin,
