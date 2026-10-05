@@ -424,6 +424,18 @@ export async function onRequest({
         (i.note?.length ?? 0) > 2000
       )
         throw new HttpError(400, "주제와 카테고리를 확인하세요.");
+      if (i.status === "approved") {
+        const active = await env.WORKBOARD_DB.prepare(
+          "SELECT id FROM topic_ideas WHERE site_id=? AND lower(title)=lower(?) AND status IN ('approved','in_progress') LIMIT 1",
+        )
+          .bind(w.site_id, i.title.trim())
+          .first();
+        if (active)
+          throw new HttpError(
+            409,
+            "같은 제목의 주제가 이미 승인되어 에이전트가 진행 중입니다.",
+          );
+      }
       const id = crypto.randomUUID();
       await env.WORKBOARD_DB.prepare(
         "INSERT INTO topic_ideas(id,site_id,title,category,note,status,brief_json,created_at) VALUES(?,?,?,?,?,?,?,?)",

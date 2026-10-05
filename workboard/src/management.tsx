@@ -732,9 +732,10 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
   ];
   const month = new Date().getMonth() + 1;
   const [direction, setDirection] = useState(
-    active.strategy.pillars.join(", "),
+    active.strategy.pillars.join(", ") + "\n",
   );
   const [proposals, setProposals] = useState<Record<string, any>[]>([]);
+  const [approvedTitles, setApprovedTitles] = useState<string[]>([]);
   const [topics, setTopics] = useState<Record<string, any>[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -781,6 +782,7 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
           status: "approved",
         }),
       });
+      setApprovedTitles((a) => [...a, t.title]);
       await load();
       setApprovedNotice(
         "아이디어를 승인했습니다. 에이전트가 조사·집필·사진 선정·검증·임시 발행을 자동으로 진행합니다.",
@@ -993,10 +995,12 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
             </div>
             <button
               className="button-primary mt-4"
-              disabled={busy}
+              disabled={busy || approvedTitles.includes(t.title)}
               onClick={() => void approve(t)}
             >
-              승인하고 자동 작성
+              {approvedTitles.includes(t.title)
+                ? "승인됨 · 에이전트 진행 중"
+                : "승인하고 자동 작성"}
             </button>
           </article>
         ))}

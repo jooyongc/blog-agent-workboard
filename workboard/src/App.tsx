@@ -101,12 +101,14 @@ export function App() {
     setLoading(true);
     setError("");
     try {
-      const [w, o] = await Promise.all([
-        api<{ workspaces: Workspace[]; active_id: string }>("workspaces"),
-        api<{ sites: SiteData[] }>("overview"),
-      ]);
+      // Workspaces are small and local; the overview polls every remote site
+      // and can take seconds, so the shell must not wait for it.
+      const w = await api<{ workspaces: Workspace[]; active_id: string }>(
+        "workspaces",
+      );
       setWorkspaces(w.workspaces);
       setActiveId(w.active_id);
+      const o = await api<{ sites: SiteData[] }>("overview");
       setSites(o.sites);
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) setAuthed(false);

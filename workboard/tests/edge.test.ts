@@ -15,7 +15,7 @@ import { enqueueApproved } from "../server/harness";
 import { insertStockPhotos } from "../server/media";
 import { creativeAsset, PendingMedia } from "../server/firefly";
 import { verifyGenerated } from "../server/automation";
-import { plainEvidence } from "../server/strategy";
+import { plainEvidence, reconcileSources } from "../server/strategy";
 function db() {
   const d = new DatabaseSync(":memory:");
   d.exec(
@@ -968,4 +968,90 @@ test("research citation markup is stripped at the source and blocked in articles
   assert.ok(!clean.issues.some((i) => i.includes("<cite>")));
   assert.ok(leaked.issues.some((i) => i.includes("<cite>")));
   assert.equal(leaked.passed, false);
+});
+
+test("research sources are reconciled against actual search results deterministically", () => {
+  const evidence = [
+    "https://english.visitseoul.net/attractions/Bukchon-Hanok-Village_/263",
+    "https://english.visitkorea.or.kr/svc/contents/contentsView.do?vcontsId=215658&menuSn=351",
+    "http://www.english.visitseoul.net/tours/Bukchon/ENN000855/",
+  ];
+  const out = reconcileSources(
+    [
+      {
+        url: "https://english.visitseoul.net/attractions/Bukchon-Hanok-Village_/263/",
+        claim: "a",
+        evidence: "x",
+      },
+      {
+        url: "https://english.visitkorea.or.kr/svc/contents/contentsView.do?menuSn=351&vcontsId=215658",
+        claim: "b",
+        evidence: "y",
+      },
+      {
+        url: "https://english.visitseoul.net/tours/Bukchon/ENN000855",
+        claim: "c",
+        evidence: "z",
+      },
+      {
+        url: "https://english.visitseoul.net/made-up/page",
+        claim: "d",
+        evidence: "w",
+      },
+      { url: "https://example.com/x", claim: "e", evidence: "v" },
+      {
+        url: "https://english.visitseoul.net/attractions/Bukchon-Hanok-Village_/263",
+        claim: "f",
+        evidence: "",
+      },
+    ],
+    evidence,
+    ["english.visitkorea.or.kr", "english.visitseoul.net"],
+  );
+  assert.equal(out.accepted.length, 3);
+  assert.equal(out.distinct, 3);
+  assert.equal(out.searched, 3);
+  assert.equal(
+    out.accepted[2].url,
+    "http://www.english.visitseoul.net/tours/Bukchon/ENN000855/",
+  );
+  assert.deepEqual(
+    out.rejected.map((r) => r.reason),
+    ["검색 결과에 없음", "검색 결과에 없음", "근거 인용 없음"],
+  );
+  assert.equal(reconcileSources([], [], []).distinct, 0);
+  assert.equal(
+    reconcileSources(
+      [{ url: "https://english.visitseoul.net/x", claim: "a", evidence: "e" }],
+      [
+        "https://english.visitseoul.net/x",
+        "https://english.visitseoul.net/x#top",
+      ],
+      ["english.visitseoul.net"],
+    ).searched,
+    1,
+  );
+});
+
+test("a title cannot be approved twice while its agent run is active", async () => {
+  const { env } = environment();
+  const body = JSON.stringify({
+    site_id: "koreadecode",
+    title: "Korean tea houses in Seoul",
+    category: "Culture",
+    status: "approved",
+  });
+  const first = await request("topics", env, { method: "POST", body });
+  assert.equal(first.status, 201);
+  const second = await request("topics", env, { method: "POST", body });
+  assert.equal(second.status, 409);
+  const proposed = await request("topics", env, {
+    method: "POST",
+    body: JSON.stringify({
+      site_id: "koreadecode",
+      title: "Korean tea houses in Seoul",
+      category: "Culture",
+    }),
+  });
+  assert.equal(proposed.status, 201);
 });
