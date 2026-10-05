@@ -28,6 +28,13 @@ export function renderMarkdown(md: string) {
   renderer.html = ({ text }) => esc(text);
   renderer.link = function ({ href, title, tokens }) {
     const label = this.parser.parseInline(tokens);
+    if (
+      label.startsWith("Video: ") &&
+      /^https:\/\/(?:agkkvtfwqmzgbrqhvohs\.supabase\.co\/storage\/v1\/object\/public\/workboard-media\/|blog-agent-workboard\.pages\.dev\/stock\/)[^\s]+\.(?:mov|mp4)$/.test(
+        href,
+      )
+    )
+      return `<video controls preload="metadata" playsinline style="width:100%;max-height:480px" aria-label="${esc(label.slice(7))}"><source src="${esc(href)}"/><a href="${esc(href)}">${label}</a></video>`;
     return safeUrl(href)
       ? `<a href="${esc(href)}"${title ? ` title="${esc(title)}"` : ""} rel="noopener noreferrer">${label}</a>`
       : label;

@@ -11,8 +11,10 @@ async function run(env: SchedulerEnv) {
       body: "{}",
     });
     if (!r.ok) throw Error("Harness HTTP " + r.status);
-    const result = (await r.json()) as { worked: boolean };
+    const result = (await r.json()) as { worked: boolean; waiting?: boolean };
     if (!result.worked) break;
+    if (result.waiting)
+      await new Promise((resolve) => setTimeout(resolve, 5000));
   }
   const res = await fetch(
     new URL("/api/internal/scheduler", env.WORKBOARD_URL),

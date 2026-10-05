@@ -382,6 +382,39 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
                 }
               />
             </label>
+            <label className="field-label">
+              미디어 에이전트 방식
+              <select
+                value={editing.strategy.media_mode || "stock"}
+                onChange={(e) =>
+                  edit("strategy", {
+                    ...editing.strategy,
+                    media_mode: e.target.value as "stock" | "hybrid",
+                  })
+                }
+              >
+                <option value="stock">무료 사진·라이선스 Stock</option>
+                <option value="hybrid">무료 사진 + Adobe 생성 이미지</option>
+              </select>
+              <small>
+                Adobe 생성은 Firefly Services API 연결 후 활성화됩니다.
+              </small>
+            </label>
+            <label className="field-label">
+              <span>
+                <input
+                  type="checkbox"
+                  checked={!!editing.strategy.generate_video}
+                  onChange={(e) =>
+                    edit("strategy", {
+                      ...editing.strategy,
+                      generate_video: e.target.checked,
+                    })
+                  }
+                />{" "}
+                Adobe 생성 영상도 추가
+              </span>
+            </label>
             <details>
               <summary>저장된 주제 템플릿 편집</summary>
               <label className="field-label">
@@ -1070,6 +1103,12 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
         note="아이디어만 승인하세요. 역할별 에이전트가 작업을 이어서 임시 발행까지 완료합니다."
       />
       {note(error)}
+      <p className="flow-description">
+        무료 사진: {data?.media?.pexels ? "Pexels 연결" : "Pexels 미연결"} ·{" "}
+        {data?.media?.unsplash ? "Unsplash 연결" : "Unsplash 미연결"} · Adobe
+        라이선스 자료 사용 가능 · Firefly:{" "}
+        {data?.media?.firefly ? "연결됨" : "Developer API 연결 대기"}
+      </p>
       <div className="workflow-guide">
         {[
           "공식 출처 조사",

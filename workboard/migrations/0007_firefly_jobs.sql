@@ -1,0 +1,1 @@
+CREATE TABLE creative_requests(id TEXT PRIMARY KEY,site_id TEXT NOT NULL,kind TEXT NOT NULL,prompt TEXT NOT NULL,status TEXT NOT NULL,status_url TEXT,result_json TEXT,error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);

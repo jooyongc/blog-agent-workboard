@@ -1,9 +1,10 @@
 import type { Env } from "./env";
 import type { Workspace, Article } from "../shared/types";
 import { HttpError } from "./http";
+import library from "../shared/licensed-media.json";
 export type StockPhoto = {
   id: string;
-  provider: "Pexels" | "Unsplash";
+  provider: "Pexels" | "Unsplash" | "Adobe Stock" | "Adobe Firefly";
   url: string;
   page: string;
   photographer: string;
@@ -11,7 +12,7 @@ export type StockPhoto = {
   alt: string;
   license_url: string;
 };
-export async function stockPhotos(
+async function pexelsPhotos(
   env: Env,
   query: string,
   count = 2,
@@ -90,6 +91,113 @@ export async function stockPhotos(
     );
   return photos;
 }
+async function unsplashPhotos(
+  env: Env,
+  query: string,
+  count: number,
+): Promise<StockPhoto[]> {
+  const key =
+    typeof env.UNSPLASH_ACCESS_KEY === "string" ? env.UNSPLASH_ACCESS_KEY : "";
+  if (!key) return [];
+  const headers = { Authorization: "Client-ID " + key, "Accept-Version": "v1" };
+  const response = await fetch(
+    "https://api.unsplash.com/search/photos?" +
+      new URLSearchParams({
+        query,
+        per_page: "10",
+        orientation: "landscape",
+        content_filter: "high",
+      }),
+    { headers, signal: AbortSignal.timeout(30000) },
+  );
+  if (!response.ok) return [];
+  const data = (await response.json()) as {
+    results: {
+      id: string;
+      alt_description: string;
+      urls: { regular: string };
+      links: { html: string; download_location: string };
+      user: { name: string; links: { html: string } };
+    }[];
+  };
+  const selected = data.results
+    .filter(
+      (x) =>
+        x.urls.regular.startsWith("https://images.unsplash.com/") &&
+        x.links.download_location.startsWith("https://api.unsplash.com/"),
+    )
+    .slice(0, count);
+  const result: StockPhoto[] = [];
+  for (const x of selected) {
+    const tracking = await fetch(x.links.download_location, {
+      headers,
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!tracking.ok) continue;
+    const credit = (url: string) =>
+      url +
+      (url.includes("?") ? "&" : "?") +
+      "utm_source=blog_agent_workboard&utm_medium=referral";
+    result.push({
+      id: x.id,
+      provider: "Unsplash",
+      url: x.urls.regular,
+      page: credit(x.links.html),
+      photographer: x.user.name,
+      photographer_url: credit(x.user.links.html),
+      alt: x.alt_description || query,
+      license_url: "https://unsplash.com/license",
+    });
+  }
+  return result;
+}
+export async function stockPhotos(
+  env: Env,
+  query: string,
+  count = 2,
+): Promise<StockPhoto[]> {
+  const adobe = library
+    .filter(
+      (x) =>
+        x.type === "photo" &&
+        x.tags.some((tag) => query.toLowerCase().includes(tag)),
+    )
+    .map((x) => ({
+      id: x.id,
+      provider: "Adobe Stock" as const,
+      url: x.url,
+      page: x.page,
+      photographer: "Adobe Stock contributor",
+      photographer_url: x.page,
+      alt: x.alt,
+      license_url: "https://stock.adobe.com/license-terms",
+    }));
+  const splash = await unsplashPhotos(
+    env,
+    query,
+    Math.max(1, count - adobe.length),
+  ).catch(() => []);
+  let photos = [...adobe, ...splash].slice(0, count);
+  if (photos.length < count) {
+    const pexels = await pexelsPhotos(env, query, count - photos.length).catch(
+      () => [],
+    );
+    photos = [...photos, ...pexels].slice(0, count);
+  }
+  if (photos.length < count)
+    throw new HttpError(
+      409,
+      "주제에 맞는 무료 사진을 2장 이상 확보하지 못했습니다. 검색 연결을 확인하세요.",
+    );
+  return photos;
+}
+export function licensedVideos(query: string) {
+  return library.filter(
+    (x) =>
+      x.type === "video" &&
+      x.tags.some((tag) => query.toLowerCase().includes(tag)),
+  );
+}
 export function insertStockPhotos(
   article: Article,
   photos: StockPhoto[],
@@ -124,6 +232,22 @@ export async function illustrate(
   );
   for (const lang of w.languages)
     result[lang] = insertStockPhotos(result[lang], photos);
+  const videos = licensedVideos(query);
+  if (videos.length)
+    for (const lang of w.languages) {
+      const video = videos[0];
+      result[lang].videos = [
+        {
+          id: video.id,
+          provider: "Adobe Stock",
+          url: video.url,
+          page: video.page,
+          alt: video.alt,
+        },
+      ];
+      result[lang].content_md +=
+        `\n\n[Video: ${video.alt}](${video.url})\n\n*Video: [Adobe Stock](${video.page}). Licensed stock footage.*`;
+    }
   return result;
 }
 export async function mediaResponse(env: Env, path: string) {

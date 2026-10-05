@@ -103,6 +103,9 @@ export function validateWorkspace(input: Workspace) {
   const s = input.strategy;
   if (
     !s ||
+    (s.media_mode !== undefined &&
+      !["stock", "hybrid"].includes(s.media_mode)) ||
+    (s.generate_video !== undefined && typeof s.generate_video !== "boolean") ||
     typeof s.voice !== "string" ||
     s.voice.length > 5000 ||
     typeof s.audience !== "string" ||

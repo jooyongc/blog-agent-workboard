@@ -25,6 +25,7 @@ import { oauthStart, oauthCallback } from "./oauth";
 import { mediaResponse } from "./media";
 import { advanceHarness, enqueueApproved } from "./harness";
 import { measure } from "./measurement";
+import { fireflyReady } from "./firefly";
 export async function onRequest({
   request,
   env,
@@ -377,6 +378,12 @@ export async function onRequest({
       return json({
         workspace: w,
         connection: await readiness(w, env),
+        media: {
+          pexels: !!env.PEXELS_API_KEY,
+          unsplash: !!env.UNSPLASH_ACCESS_KEY,
+          adobe_stock: true,
+          firefly: fireflyReady(env),
+        },
         jobs: await jobs(env, id),
         runs: r.results,
         workflows: (

@@ -8,6 +8,7 @@ import { verifyGenerated } from "./automation";
 import { quality } from "./seo";
 import { publishJob } from "./publication";
 import { HttpError } from "./http";
+import { creativeAsset, fireflyReady, PendingMedia } from "./firefly";
 const stages = [
   "researcher",
   "writer",
@@ -121,14 +122,68 @@ export async function advanceHarness(env: Env) {
       } satisfies DraftInput;
     }
     if (task.stage === "photo_editor") {
-      payload.input.translations = await illustrate(
-        env,
-        w,
-        payload.slug,
-        payload.input.translations,
-      );
+      if (!payload.input.translations[w.languages[0]].images?.length)
+        payload.input.translations = await illustrate(
+          env,
+          w,
+          payload.slug,
+          payload.input.translations,
+        );
       payload.input.featured_image_url =
         payload.input.translations[w.languages[0]].images?.[0]?.url;
+    }
+    if (
+      task.stage === "photo_editor" &&
+      w.strategy.media_mode === "hybrid" &&
+      fireflyReady(env)
+    ) {
+      const prompt = `An editorial conceptual illustration for ${payload.title}. Natural lighting, Korean cultural context, no logos, text, prices or specific product claims. Illustrative, not documentary evidence.`;
+      const image = await creativeAsset(
+        env,
+        task.job_id + "-image",
+        w.site_id,
+        "image",
+        prompt,
+      );
+      for (const lang of w.languages) {
+        const article = payload.input.translations[lang];
+        if (!article.images.some((x: any) => x.provider === "Adobe Firefly")) {
+          article.content_md += `\n\n![AI-generated conceptual illustration](${image.url})\n\n*AI-generated with Adobe Firefly. Not documentary evidence.*`;
+          article.images.push({
+            id: task.job_id + "-image",
+            provider: "Adobe Firefly",
+            url: image.url,
+            page: "https://www.adobe.com/products/firefly.html",
+            photographer: "Adobe Firefly",
+            photographer_url: "https://www.adobe.com/products/firefly.html",
+            alt: "AI-generated conceptual illustration",
+            license_url: "https://www.adobe.com/legal/terms.html",
+          });
+        }
+      }
+      if (w.strategy.generate_video) {
+        const video = await creativeAsset(
+          env,
+          task.job_id + "-video",
+          w.site_id,
+          "video",
+          prompt + " Slow gentle camera movement.",
+        );
+        for (const lang of w.languages) {
+          const article = payload.input.translations[lang];
+          article.content_md += `\n\n[Video: AI-generated conceptual footage](${video.url})\n\n*AI-generated with Adobe Firefly. Not documentary evidence.*`;
+          article.videos = [
+            ...(article.videos || []),
+            {
+              id: task.job_id + "-video",
+              provider: "Adobe Firefly",
+              url: video.url,
+              page: "https://www.adobe.com/products/firefly.html",
+              alt: "AI-generated conceptual footage",
+            },
+          ];
+        }
+      }
     }
     if (task.stage === "verifier") {
       const factual = await verifyGenerated(
@@ -211,6 +266,26 @@ export async function advanceHarness(env: Env) {
       next: next || null,
     };
   } catch (e) {
+    if (e instanceof PendingMedia) {
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE agent_workflows SET status='pending',payload_json=?,lease_until=NULL,updated_at=? WHERE job_id=?",
+      )
+        .bind(JSON.stringify(payload), new Date().toISOString(), task.job_id)
+        .run();
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE agent_steps SET status='waiting',finished_at=? WHERE id=?",
+      )
+        .bind(new Date().toISOString(), step)
+        .run();
+      if (payload.input)
+        await saveProgress(env, task.job_id, payload, "agent_pending");
+      return {
+        worked: true,
+        waiting: true,
+        job_id: task.job_id,
+        agent: task.stage,
+      };
+    }
     const error = e instanceof Error ? e.message : "에이전트 실행 실패";
     await env.WORKBOARD_DB.prepare(
       "UPDATE agent_workflows SET status='failed',payload_json=?,error=?,lease_until=NULL,updated_at=? WHERE job_id=?",

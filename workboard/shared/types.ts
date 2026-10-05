@@ -1,5 +1,7 @@
 export type Integration = "blogger" | "supabase" | "webhook";
 export type Strategy = {
+  media_mode?: "stock" | "hybrid";
+  generate_video?: boolean;
   audience: string;
   voice: string;
   pillars: string[];
@@ -74,9 +76,16 @@ export type Post = {
 };
 export type PostsResult = { posts: Post[]; warning?: string; error?: string };
 export type Article = {
+  videos?: {
+    id: string;
+    provider: string;
+    url: string;
+    page: string;
+    alt: string;
+  }[];
   images?: {
     id: string;
-    provider: "Pexels" | "Unsplash";
+    provider: "Pexels" | "Unsplash" | "Adobe Stock" | "Adobe Firefly";
     url: string;
     page: string;
     photographer: string;

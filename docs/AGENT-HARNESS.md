@@ -11,3 +11,9 @@ The user approves an idea in /topics. Only approved topic_ideas become workflows
 Completed roles are not regenerated on retry. Expired running leases require reconciliation. Ambiguous publisher receipts cannot be blindly replayed. Public publication is separate from this approval-to-private-draft harness. No automatic topic approval.
 
 PEXELS_API_KEY is a Cloudflare Pages secret. Keys are not bundled into browser code. Pexels terms: https://www.pexels.com/license/ . Adobe preview assets are never treated as licensed downloads. Unsplash needs its own authorized API key and API attribution/download-event integration before becoming an active provider.
+
+## Additional media providers
+
+UNSPLASH_ACCESS_KEY enables official API search with mandatory photographer attribution, hotlinked returned CDN URLs and download tracking. Licensed Adobe Stock originals are listed in workboard/shared/licensed-media.json; never use expiring preview URLs as publication assets. Two photos are hosted in Pages, the licensed video is permanently stored in the existing Supabase workboard-media bucket. Only matching subjects are selected.
+
+Set strategy.media_mode=hybrid to add Adobe Firefly conceptual imagery; strategy.generate_video also requests video. FIREFLY_SERVICES_CLIENT_ID and FIREFLY_SERVICES_CLIENT_SECRET are server secrets, FIREFLY_SERVICES_SCOPE comes from Developer Console. Firefly web login does not replace API credentials. Async status URLs and completed outputs persist in creative_requests; uncertain submissions are not repeated. Outputs are retained in workboard-media and disclosed as generated. This API adapter is tested with simulated Adobe responses; real generation remains pending API credentials. The stock-only flow stays active while credentials are absent.

@@ -13,6 +13,7 @@ import { quality, extractFaq, schema } from "../server/seo";
 import { publishJob } from "../server/publication";
 import { enqueueApproved } from "../server/harness";
 import { insertStockPhotos } from "../server/media";
+import { creativeAsset, PendingMedia } from "../server/firefly";
 function db() {
   const d = new DatabaseSync(":memory:");
   d.exec(
@@ -45,7 +46,11 @@ function db() {
       "utf8",
     ),
   );
-  for (const name of ["0005_stock_images.sql", "0006_agent_harness.sql"])
+  for (const name of [
+    "0005_stock_images.sql",
+    "0006_agent_harness.sql",
+    "0007_firefly_jobs.sql",
+  ])
     d.exec(
       fs.readFileSync(
         new URL("../migrations/" + name, import.meta.url),
@@ -698,4 +703,78 @@ test("stock photos retain license evidence and are distributed without repeat in
   assert.equal((result.content_md.match(/!\[/g) || []).length, 2);
   assert.ok(result.content_md.includes("Photo author / Pexels"));
   assert.equal(insertStockPhotos(result, photos).content_md, result.content_md);
+});
+
+test("Firefly persists async job IDs and does not submit generation twice", async () => {
+  const { env } = environment();
+  env.FIREFLY_SERVICES_CLIENT_ID = "test-id";
+  env.FIREFLY_SERVICES_CLIENT_SECRET = "test-secret";
+  env.NATIVE_BLOG_SUPABASE_KEY = "test-storage";
+  const original = globalThis.fetch;
+  let submissions = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("adobelogin.com"))
+      return Response.json({ access_token: "mock-token" });
+    if (url.endsWith("/images/generate-async")) {
+      submissions++;
+      return Response.json({
+        statusUrl: "https://firefly-api.adobe.io/v3/status/mock-job",
+      });
+    }
+    if (url.endsWith("/status/mock-job"))
+      return Response.json({
+        status: "succeeded",
+        outputs: [
+          { image: { url: "https://generated.s3.amazonaws.com/example.png" } },
+        ],
+      });
+    if (url.includes("s3.amazonaws.com"))
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: { "Content-Type": "image/png" },
+      });
+    if (url.includes("/storage/v1/object/"))
+      return Response.json({ Key: "test" });
+    throw Error("Unexpected request");
+  };
+  try {
+    await assert.rejects(
+      creativeAsset(
+        env,
+        "workflow-image",
+        "koreadecode",
+        "image",
+        "Concept scene",
+      ),
+      PendingMedia,
+    );
+    const result = await creativeAsset(
+      env,
+      "workflow-image",
+      "koreadecode",
+      "image",
+      "Concept scene",
+    );
+    assert.equal(result.generated, true);
+    assert.ok(result.url.includes("/object/public/workboard-media/firefly/"));
+    await creativeAsset(
+      env,
+      "workflow-image",
+      "koreadecode",
+      "image",
+      "Concept scene",
+    );
+    assert.equal(submissions, 1);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+test("only licensed hosted videos become safe embedded players", () => {
+  const html = renderMarkdown(
+    "[Video: Seoul night](https://agkkvtfwqmzgbrqhvohs.supabase.co/storage/v1/object/public/workboard-media/adobe-stock/309209961.mov)",
+  );
+  assert.ok(html.includes("<video controls"));
+  assert.ok(
+    !renderMarkdown("[Video: bad](javascript:alert(1))").includes("<video"),
+  );
 });

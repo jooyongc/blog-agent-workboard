@@ -1,0 +1,32 @@
+[
+  {
+    "id": "236240088",
+    "type": "photo",
+    "url": "https://blog-agent-workboard.pages.dev/stock/236240088.jpg",
+    "page": "https://stock.adobe.com/images/236240088",
+    "alt": "Traditional Korean architecture at Bukchon Hanok Village, Seoul",
+    "tags": ["bukchon", "hanok"],
+    "license_state": "purchased",
+    "licensed_at": "2026-10-05"
+  },
+  {
+    "id": "355378172",
+    "type": "photo",
+    "url": "https://blog-agent-workboard.pages.dev/stock/355378172.jpg",
+    "page": "https://stock.adobe.com/images/355378172",
+    "alt": "Traditional architecture in Bukchon Hanok Village",
+    "tags": ["bukchon", "hanok"],
+    "license_state": "just_purchased",
+    "licensed_at": "2026-10-05"
+  },
+  {
+    "id": "309209961",
+    "type": "video",
+    "url": "https://agkkvtfwqmzgbrqhvohs.supabase.co/storage/v1/object/public/workboard-media/adobe-stock/309209961.mov",
+    "page": "https://stock.adobe.com/video/309209961",
+    "alt": "Traffic in Seoul at night",
+    "tags": ["seoul transport", "seoul traffic", "seoul night", "gangnam"],
+    "license_state": "just_purchased",
+    "licensed_at": "2026-10-05"
+  }
+]
