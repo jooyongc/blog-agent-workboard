@@ -1,11 +1,14 @@
 export type Env = {
+  [name: string]: unknown;
+  SCHEDULER_TOKEN?: string;
+  CONNECTION_SECRET?: string;
+  AI?: Ai;
+  PUBLIC_WORKBOARD_URL?: string;
   WORKBOARD_DB: D1Database;
   DASHBOARD_PASSWORD: string;
   DASHBOARD_SESSION_SECRET: string;
   NATIVE_BLOG_SUPABASE_URL?: string;
   NATIVE_BLOG_SUPABASE_KEY?: string;
-  ASTY_SITE_URL?: string;
-  ASTY_AGENT_API_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   GITHUB_TOKEN?: string;
   GITHUB_REPO?: string;

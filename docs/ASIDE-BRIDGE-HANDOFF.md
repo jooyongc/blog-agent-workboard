@@ -1,4 +1,6 @@
-# Korea Buy List — aside browser 브릿지
+# Korea Buy List — 이전 aside browser 브릿지 기록
+
+2026-10-05 Cloudflare 전환에 따라 이 문서는 과거 운영 기록이다. 격일 루틴 `cisZ0evksgQuTweq`는 사용자의 요청으로 일시 중지되었고 `next_run_at`이 비워졌다. 현재 발행 설정과 절차는 [Cloudflare 운영 가이드](CLOUDFLARE-PAGES.md)와 [Workboard 운영 절차](OPERATIONS.md)를 따른다. 아래 설명은 기존 이관 맥락을 보존한다.
 
 기존 격일 10:00 Asia/Seoul 루틴 `cisZ0evksgQuTweq`가 발행 일정의 단일 소유자다. 새 cron을 추가하지 않는다. 현재 루틴은 초안 작성 후 게시 승인을 기다린다. 루틴 DB를 직접 수정하지 않는다.
 

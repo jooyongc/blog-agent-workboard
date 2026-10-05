@@ -8,11 +8,32 @@ import { renderMarkdown, draftPayload, validateDraft } from "../server/content";
 import { CATALOG, getWorkspace } from "../shared/catalog";
 import type { Env } from "../server/env";
 import type { DraftInput } from "../shared/types";
+import { articleUrl, workspace } from "../server/registry";
+import { quality, extractFaq, schema } from "../server/seo";
+import { publishJob } from "../server/publication";
 function db() {
   const d = new DatabaseSync(":memory:");
   d.exec(
     fs.readFileSync(
       new URL("../migrations/0001_workboard.sql", import.meta.url),
+      "utf8",
+    ),
+  );
+  d.exec(
+    fs.readFileSync(
+      new URL(
+        "../migrations/0002_workspaces_and_automation.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  d.exec(
+    fs.readFileSync(
+      new URL(
+        "../migrations/0003_oauth_media_measurement.sql",
+        import.meta.url,
+      ),
       "utf8",
     ),
   );
@@ -34,8 +55,8 @@ function db() {
             return { results: s.all(...args) };
           },
           async run() {
-            s.run(...args);
-            return { success: true };
+            const r = s.run(...args);
+            return { success: true, meta: { changes: Number(r.changes) } };
           },
         };
       },
@@ -49,6 +70,7 @@ function environment() {
     DASHBOARD_PASSWORD: "test-password",
     DASHBOARD_SESSION_SECRET: "test-session-secret-at-least-32-chars",
     AI_ENABLED: "true",
+    NATIVE_BLOG_SUPABASE_URL: "https://agkkvtfwqmzgbrqhvohs.supabase.co",
   };
   return { d, env };
 }
@@ -72,10 +94,10 @@ async function request(
     waitUntil: () => {},
   });
 }
-test("catalog always includes all four production workspaces and two Blogger languages", () => {
+test("catalog excludes retired ASTY and preserves independently authored Blogger languages", () => {
   assert.deepEqual(
     CATALOG.map((w) => w.site_id),
-    ["asty-cabin", "korea-buy-list", "koreabylocal", "koreadecode"],
+    ["korea-buy-list", "koreabylocal", "koreadecode"],
   );
   assert.deepEqual(getWorkspace("korea-buy-list").languages, ["en", "ja"]);
   assert.throws(() => getWorkspace("../asty-cabin"));
@@ -93,7 +115,7 @@ test("workspace API and active selection use the same complete catalog", async (
   const { env } = environment();
   const res = await request("workspaces", env);
   const j = (await res.json()) as { workspaces: unknown[] };
-  assert.equal(j.workspaces.length, 4);
+  assert.equal(j.workspaces.length, 3);
   const select = await request("workspaces/active", env, {
     method: "POST",
     body: JSON.stringify({ site_id: "koreadecode" }),
@@ -107,7 +129,117 @@ test("workspace API and active selection use the same complete catalog", async (
     method: "POST",
     body: JSON.stringify({ site_id: "not-registered" }),
   });
-  assert.equal(invalid.status, 400);
+  assert.equal(invalid.status, 404);
+});
+test("custom workspace persists and native article URLs follow each site's route", async () => {
+  const { env } = environment();
+  const next = structuredClone(getWorkspace("koreabylocal"));
+  next.site_id = "my-new-site";
+  next.name = "My New Site";
+  next.site_url = "https://new.example.com";
+  next.admin_url = "https://new.example.com/admin";
+  next.site_url_env = "MY_NEW_SITE_URL";
+  next.article_path = "/stories/{slug}";
+  const created = await request("workspaces", env, {
+    method: "POST",
+    body: JSON.stringify(next),
+  });
+  assert.equal(created.status, 201);
+  assert.equal(
+    articleUrl(await workspace(env, "my-new-site"), "a-guide"),
+    "https://new.example.com/stories/a-guide",
+  );
+  assert.equal(
+    articleUrl(await workspace(env, "koreabylocal"), "a-guide"),
+    "https://koreabylocal.com/guidebook/a-guide",
+  );
+  assert.equal(
+    articleUrl(await workspace(env, "koreadecode"), "a-guide"),
+    "https://koreadecode.com/blog/a-guide",
+  );
+  next.article_path = "https://other.example.com/{slug}";
+  assert.equal(
+    (
+      await request("workspaces", env, {
+        method: "PUT",
+        body: JSON.stringify(next),
+      })
+    ).status,
+    400,
+  );
+});
+test("scheduler requires its own bearer token and its check never advances schedules", async () => {
+  const { env, d } = environment();
+  env.SCHEDULER_TOKEN = "a-long-secret-for-scheduler";
+  const w = structuredClone(getWorkspace("koreabylocal"));
+  w.schedule.enabled = true;
+  w.schedule.next_run = "2020-01-01T00:00:00.000Z";
+  d.sqlite
+    .prepare("UPDATE workspace_records SET config_json=? WHERE site_id=?")
+    .run(JSON.stringify(w), w.site_id);
+  const before = d.sqlite
+    .prepare("SELECT config_json FROM workspace_records WHERE site_id=?")
+    .get(w.site_id);
+  assert.equal(
+    (
+      await request(
+        "internal/scheduler",
+        env,
+        { method: "POST", body: "{}" },
+        false,
+      )
+    ).status,
+    401,
+  );
+  const res = await request(
+    "internal/scheduler",
+    env,
+    {
+      method: "POST",
+      headers: { Authorization: "Bearer " + env.SCHEDULER_TOKEN },
+      body: '{"dry_run":true}',
+    },
+    false,
+  );
+  assert.equal(res.status, 200);
+  const data = (await res.json()) as { due: { site_id: string }[] };
+  assert.ok(data.due.some((x) => x.site_id === w.site_id));
+  assert.deepEqual(
+    d.sqlite
+      .prepare("SELECT config_json FROM workspace_records WHERE site_id=?")
+      .get(w.site_id),
+    before,
+  );
+});
+test("FAQ schema reflects visible answers and images do not count as cited sources", () => {
+  const w = getWorkspace("koreabylocal");
+  const a = {
+    title: "What is Seoul local culture?",
+    meta_description: "A practical answer.",
+    tags: [],
+    primary_keyword: "Seoul local culture",
+    content_md:
+      "## Quick Answer\n" +
+      Array(45).fill("Seoul culture is shared through daily walks.").join(" ") +
+      "\n\n## What is local culture?\nIt is everyday life in Seoul.\n\n## How can visitors plan?\nUse official guides.\n\n## Where can travelers start?\nRead local maps.\n\n**Q: What is culture?**\nA: Everyday shared practice.\n\n**Q: How can I learn?**\nA: Read local guides.\n\n**Q: Where can I go?**\nA: Seoul.\n\nLast updated: 2026-10-05\n\n![Picture](https://example.com/image.jpg)",
+  };
+  const result = quality(a, w, "en");
+  assert.ok(result.issues.some((i) => i.includes("출처")));
+  const faq = extractFaq(a.content_md);
+  const data = schema(
+    w,
+    a,
+    "en",
+    "https://koreabylocal.com/guidebook/test",
+    "2026-10-05T00:00:00Z",
+  );
+  const faqSchema = data.find((x) => x["@type"] === "FAQPage") as {
+    mainEntity: { name: string }[];
+  };
+  assert.deepEqual(
+    faqSchema.mainEntity.map((x) => x.name),
+    faq.map((x) => x.question),
+  );
 });
 test("private APIs require a session and block cross-origin mutation", async () => {
   const { env } = environment();
@@ -197,7 +329,7 @@ function draft(site_id = "koreabylocal"): DraftInput {
 }
 test("draft payloads target the actual native schemas and stay private", () => {
   const input = draft();
-  const w = validateDraft(input);
+  const w = validateDraft(input, getWorkspace(input.site_id));
   const payload = draftPayload(w, input);
   assert.equal(payload.status, "draft");
   assert.equal(
@@ -205,10 +337,18 @@ test("draft payloads target the actual native schemas and stay private", () => {
     null,
   );
   const other = draft("koreadecode");
-  assert.equal(draftPayload(validateDraft(other), other).status, "draft");
+  assert.equal(
+    draftPayload(validateDraft(other, getWorkspace(other.site_id)), other)
+      .status,
+    "draft",
+  );
   assert.ok("writer_name" in draftPayload(getWorkspace("koreadecode"), other));
-  assert.throws(() => validateDraft({ ...input, reviewed: false }));
-  assert.throws(() => validateDraft({ ...input, slug: "../bad" }));
+  assert.throws(() =>
+    validateDraft({ ...input, reviewed: false }, getWorkspace(input.site_id)),
+  );
+  assert.throws(() =>
+    validateDraft({ ...input, slug: "../bad" }, getWorkspace(input.site_id)),
+  );
 });
 test("Blogger requires both independently written language drafts", async () => {
   const { env } = environment();
@@ -293,18 +433,15 @@ test("D1 transaction guard enforces article, week and month caps", () => {
     /monthly_budget/,
   );
 });
-test("a Blogger selection cannot trigger the ASTY workflow", async () => {
+test("retired ASTY cannot be reconnected or dispatched", async () => {
   const { env } = environment();
-  env.GITHUB_TOKEN = "mock";
-  const res = await request("pipeline", env, {
+  const r = await request("workspaces/active", env, {
     method: "POST",
-    body: JSON.stringify({
-      site_id: "korea-buy-list",
-      limit: 3,
-      dry_run: true,
-    }),
+    body: JSON.stringify({ site_id: "asty-cabin" }),
   });
-  assert.equal(res.status, 409);
+  assert.equal(r.status, 404);
+  const old = await request("pipeline", env, { method: "POST", body: "{}" });
+  assert.equal(old.status, 404);
 });
 test("repeat draft submission cannot duplicate remote content", async () => {
   const { env } = environment();
@@ -354,35 +491,103 @@ test("repeat draft submission cannot duplicate remote content", async () => {
   }
 });
 
-test("ASTY web actions preserve the existing English and DeepL pipeline", async () => {
-  const { env, d } = environment();
-  env.ANTHROPIC_API_KEY = "test-key";
-  const generated = await request("content/generate", env, {
+test("ASTY content endpoints reject removed workspaces", async () => {
+  const { env } = environment();
+  const r = await request("content/generate", env, {
     method: "POST",
     body: JSON.stringify({ site_id: "asty-cabin" }),
   });
-  assert.equal(generated.status, 409);
-  const a = {
-    title: "Legacy draft",
-    meta_description: "Internal check",
-    tags: [],
-    content_md:
-      "This private draft checks that the existing ASTY publication flow remains the owner.",
+  assert.equal(r.status, 404);
+});
+test("native publication creates a draft, then publishes at its real canonical path", async () => {
+  const { env } = environment();
+  env.NATIVE_BLOG_SUPABASE_KEY = "mock-secret";
+  const old = globalThis.fetch;
+  const calls: { method: string; url: string; body: string }[] = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({
+      method: init?.method ?? "GET",
+      url: String(url),
+      body: String(init?.body ?? ""),
+    });
+    if (init?.method === "POST")
+      return Response.json(
+        [{ id: 42, slug: "test-article", status: "draft" }],
+        { status: 201 },
+      );
+    if (init?.method === "PATCH")
+      return Response.json([
+        { id: 42, slug: "test-article", status: "published" },
+      ]);
+    return Response.json([]);
   };
-  const saved = await request("content/draft", env, {
-    method: "POST",
-    body: JSON.stringify({
-      request_id: "legacy-check",
-      site_id: "asty-cabin",
-      slug: "legacy-check",
-      category: "culture",
-      reviewed: true,
-      translations: { en: a, ja: a, "zh-hans": a },
-    }),
-  });
-  assert.equal(saved.status, 409);
-  assert.equal(
-    d.sqlite.prepare("SELECT COUNT(*) AS total FROM ai_runs").get()?.total,
-    0,
-  );
+  try {
+    const result = await publishJob(
+      env,
+      getWorkspace("koreabylocal"),
+      "native-job-1",
+      draft(),
+      "publish",
+    );
+    assert.equal(result.mode, "publish");
+    assert.equal(calls.filter((c) => c.method === "POST").length, 1);
+    const patch = calls.find((c) => c.method === "PATCH");
+    assert.ok(patch);
+    assert.match(
+      patch.body,
+      /https:\/\/koreabylocal\.com\/guidebook\/test-article/,
+    );
+    assert.equal(JSON.parse(patch.body).status, "published");
+    assert.ok(patch.url.includes("status=eq.draft"));
+  } finally {
+    globalThis.fetch = old;
+  }
+});
+test("uncertain Blogger second-draft response does not create duplicate posts on replay", async () => {
+  const { env } = environment();
+  env.BLOGGER_ACCESS_TOKEN = "mock-token";
+  const input = draft("korea-buy-list");
+  input.translations.ja = {
+    ...input.translations.en,
+    title: "日本語の記事",
+    content_md:
+      "日本語で書いた独立した記事の本文です。読者が日本から韓国を訪れる場合の情報を明確に説明します。",
+  };
+  const old = globalThis.fetch;
+  let creates = 0;
+  globalThis.fetch = async (_url, init) => {
+    if (init?.method === "POST") {
+      creates++;
+      if (creates === 2) return new Response("temporary", { status: 502 });
+      return Response.json({
+        id: "post-en",
+        url: "https://koreabuylist.blogspot.com/2026/10/test.html",
+      });
+    }
+    throw Error("No other remote call expected");
+  };
+  try {
+    await assert.rejects(
+      publishJob(
+        env,
+        getWorkspace("korea-buy-list"),
+        "blogger-job-1",
+        input,
+        "publish",
+      ),
+    );
+    await assert.rejects(
+      publishJob(
+        env,
+        getWorkspace("korea-buy-list"),
+        "blogger-job-1",
+        input,
+        "publish",
+      ),
+      /이전 전송 결과가 불명확/,
+    );
+    assert.equal(creates, 2);
+  } finally {
+    globalThis.fetch = old;
+  }
 });

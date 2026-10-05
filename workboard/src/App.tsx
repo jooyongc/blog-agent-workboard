@@ -20,6 +20,12 @@ import {
 import { Icons, type IconName } from "./icons";
 import { workspaceLook, LANGUAGE_LABEL } from "./workspace-look";
 import { api, ApiError } from "./api";
+import {
+  WorkspaceManager,
+  StrategyTopics,
+  AutomationFlow,
+  Connections,
+} from "./management";
 import type {
   Workspace,
   Post,
@@ -163,16 +169,7 @@ export function App() {
       <Shell>
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route
-            path="/compose"
-            element={
-              active.integration === "asty" ? (
-                <LegacyComposer />
-              ) : (
-                <Composer key={active.site_id} />
-              )
-            }
-          />
+          <Route path="/compose" element={<Composer key={active.site_id} />} />
           <Route path="/content" element={<ContentPage />} />
           <Route path="/topics" element={<Topics key={active.site_id} />} />
           <Route path="/workspaces" element={<Workspaces />} />
@@ -223,7 +220,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
             좋은 작업실에서.
           </h1>
           <p>
-            네 개의 블로그, 각자의 독자.
+            내 블로그, 각자의 독자.
             <br />
             아이디어부터 게시까지 한곳에서 준비하세요.
           </p>
@@ -571,7 +568,7 @@ function WorkspaceCards() {
                   {busy === w.site_id
                     ? "전환 중…"
                     : w.integration === "blogger"
-                      ? "Blogger · aside"
+                      ? "Blogger · Cloudflare"
                       : d?.error
                         ? "연결 확인 필요"
                         : "사이트 연결"}
@@ -650,8 +647,8 @@ function Workflow() {
           "04",
           "게시 완료",
           active.integration === "blogger"
-            ? "기존 aside 루틴에서 게시해요."
-            : "관리자에서 검토 후 게시해요.",
+            ? "Cloudflare에서 정기 발행해요."
+            : "검증 후 예약 발행해요.",
           "Send",
         ],
       ].map(([n, title, note, icon], i) => (
@@ -759,7 +756,7 @@ function Home() {
               active.integration === "blogger" ? "—" : online ? scheduled : "—",
             note:
               active.integration === "blogger"
-                ? "기존 격일 루틴에서 확인"
+                ? "발행 흐름에서 확인"
                 : "일정에 맞춰 준비된 콘텐츠",
             icon: "Clock",
             tone: "blue",
@@ -1029,85 +1026,9 @@ function ContentPage() {
   );
 }
 function Workspaces() {
-  return (
-    <div className="studio-page animate-enter">
-      <Heading
-        eyebrow="ALL WORKSPACES"
-        title="각자의 이야기를, 한곳에서."
-        note="네 개 블로그의 언어와 운영 방식을 확인하고 작업할 사이트를 선택하세요."
-      />
-      <WorkspaceCards />
-      <section className="studio-panel">
-        <div className="panel-heading">
-          <div>
-            <h2>사이트마다 알맞은 게시 방식</h2>
-            <p>작성과 저장이 선택한 사이트에 맞춰 연결됩니다.</p>
-          </div>
-        </div>
-        <div className="integration-grid">
-          <article>
-            <span className="subtle-pill">Korea Buy List</span>
-            <h3>영어 + 일본어, 한 쌍의 글</h3>
-            <p>
-              두 독자층의 출처를 각각 준비하고 전달 파일을 만듭니다. 기존 aside
-              격일 루틴에서 이미지를 완성하고 게시합니다.
-            </p>
-          </article>
-          <article>
-            <span className="subtle-pill">Korea by Local · Korea Decode</span>
-            <h3>초안에서 완성된 이야기로</h3>
-            <p>
-              작성한 글을 해당 사이트에 초안으로 저장합니다. 관리자에서 검토하고
-              게시할 수 있습니다.
-            </p>
-          </article>
-          <article>
-            <span className="subtle-pill">ASTY Cabin</span>
-            <h3>기존 다국어 운영과 연결</h3>
-            <p>
-              기존 GitHub 파이프라인에서 영어 작성과 DeepL 번역을 진행하고
-              검토·예약 발행을 이어갑니다.
-            </p>
-          </article>
-        </div>
-      </section>
-      <Workflow />
-    </div>
-  );
+  const store = useStore();
+  return <WorkspaceManager {...store} />;
 }
-function LegacyComposer() {
-  return (
-    <div className="studio-page">
-      <Heading
-        eyebrow="ASTY CONTENT PIPELINE"
-        title="기존 작성 흐름을 이어갑니다."
-        note="ASTY는 영어 원문을 작성한 뒤 DeepL 번역과 용어 검토로 세 언어를 준비합니다."
-      />
-      <Workflow />
-      <section className="studio-panel">
-        <div className="panel-heading">
-          <h2>ASTY 다국어 글 작성</h2>
-        </div>
-        <div className="form-body">
-          <p className="flow-description">
-            기존 파이프라인에서 주제 선정·영어 작성·일본어 및 중국어 번역을
-            진행합니다. 실행 상태를 확인하고 초안의 출처·이미지·번역을 검토한 뒤
-            예약 발행하세요.
-          </p>
-          <div className="flex gap-3 flex-wrap">
-            <Link to="/flow" className="button-primary">
-              작성 파이프라인 열기 <Icon name="Flow" />
-            </Link>
-            <Link to="/content" className="button-secondary">
-              기존 콘텐츠 확인 <Icon name="Doc" />
-            </Link>
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}
-
 const emptyArticle = (): Article => ({
   title: "",
   meta_description: "",
@@ -1143,12 +1064,38 @@ function Composer() {
     message: string;
   } | null>(null);
   const requestId = useRef("");
+  const [scores, setScores] = useState<Record<
+    string,
+    { score: number; issues: string[]; passed: boolean }
+  > | null>(null);
+  const [publishAt, setPublishAt] = useState("");
   const location = useLocation();
   const navigate = useNavigate();
   const storageKey = `workboard:draft:${active.site_id}`;
+  const editingJob = new URLSearchParams(location.search).get("job");
   useEffect(() => {
     try {
       const query = new URLSearchParams(location.search);
+      const job = query.get("job");
+      if (job) {
+        void api<{
+          jobs: { id: string; request_json: string; publish_at: string }[];
+        }>(`automation?site_id=${active.site_id}`)
+          .then((r) => {
+            const row = r.jobs.find((j) => j.id === job);
+            if (!row) throw Error("예약 초안을 찾지 못했습니다.");
+            const d = JSON.parse(row.request_json) as DraftInput;
+            setTopic(d.translations[active.languages[0]].title);
+            setSlug(d.slug);
+            setCategory(d.category);
+            setArticles(d.translations);
+            setImage(d.featured_image_url ?? "");
+            setPublishAt(row.publish_at ?? "");
+            setNotice("예약 초안을 불러왔습니다. 보완 후 다시 검토해 주세요.");
+          })
+          .catch((e) => setError(e.message));
+        return;
+      }
       const t = query.get("topic");
       if (t) {
         setTopic(t);
@@ -1214,6 +1161,9 @@ function Composer() {
         }),
       });
       setArticles(r.translations);
+      setScores(
+        (r as unknown as { quality: NonNullable<typeof scores> }).quality,
+      );
       setReviewed(false);
       requestId.current = "";
       setNotice(
@@ -1298,6 +1248,97 @@ function Composer() {
         }
         void refresh();
       }
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+  function currentDraft(): DraftInput {
+    return {
+      request_id: requestId.current || crypto.randomUUID(),
+      site_id: active.site_id,
+      slug,
+      category,
+      translations: articles,
+      featured_image_url: image,
+      reviewed,
+    };
+  }
+  async function inspect() {
+    setBusy("quality");
+    setError("");
+    try {
+      const r = await api<{ quality: NonNullable<typeof scores> }>(
+        "content/quality",
+        { method: "POST", body: JSON.stringify(currentDraft()) },
+      );
+      setScores(r.quality);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+  async function schedule() {
+    setBusy("schedule");
+    setError("");
+    try {
+      const input = currentDraft();
+      const r = await api<{
+        status: string;
+        quality: NonNullable<typeof scores>;
+      }>(editingJob ? "jobs/update" : "content/schedule", {
+        method: "POST",
+        body: JSON.stringify(
+          editingJob
+            ? {
+                id: editingJob,
+                input,
+                publish_at:
+                  publishAt || new Date(Date.now() + 3600000).toISOString(),
+              }
+            : { ...input, publish_at: publishAt || undefined },
+        ),
+      });
+      setScores(r.quality);
+      setNotice(
+        r.status === "ready"
+          ? "검증을 통과해 발행 큐에 등록했습니다."
+          : "보완할 항목이 있어 검토 대기로 저장했습니다. 발행 흐름에서 이어서 수정하세요.",
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+  async function collect() {
+    setBusy("research");
+    setError("");
+    try {
+      const r = await api<{ research: Record<string, string> }>(
+        "strategy/research",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            site_id: active.site_id,
+            title: topic,
+            category,
+          }),
+        },
+      );
+      setArticles((v) =>
+        Object.fromEntries(
+          active.languages.map((l) => [
+            l,
+            { ...v[l], source_notes: r.research[l] },
+          ]),
+        ),
+      );
+      setNotice(
+        "공식 출처를 언어별로 독립 조사했습니다. AI 초안을 준비할 수 있습니다.",
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -1426,6 +1467,13 @@ function Composer() {
                 </label>
               ))}
               <div className="ai-action-row">
+                <button
+                  className="button-secondary"
+                  disabled={!!busy || !topic.trim()}
+                  onClick={() => void collect()}
+                >
+                  {busy === "research" ? "공식 자료 조사 중…" : "SEO 출처 조사"}
+                </button>
                 <button
                   className="button-primary"
                   onClick={() => void aiDraft()}
@@ -1563,6 +1611,26 @@ function Composer() {
               </div>
             </div>
             <div className="form-body">
+              <button
+                className="button-secondary"
+                disabled={!!busy || !ready}
+                onClick={() => void inspect()}
+              >
+                SEO·AEO·GEO 검증
+              </button>
+              {scores &&
+                Object.entries(scores).map(([language, q]) => (
+                  <div key={language} className="quality-card">
+                    <strong>
+                      {language.toUpperCase()} · {q.score}/100
+                    </strong>
+                    <ul>
+                      {q.issues.map((i) => (
+                        <li key={i}>{i}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
               <ul className="readiness-list">
                 {active.languages.map((l) => (
                   <li key={l}>
@@ -1626,10 +1694,42 @@ function Composer() {
                     ? "사이트에 초안 저장"
                     : "전달 파일 만들기"}
               </button>
+              <label className="field-label">
+                예약 시간
+                <input
+                  type="datetime-local"
+                  value={
+                    publishAt
+                      ? new Date(Date.parse(publishAt) + 9 * 3600000)
+                          .toISOString()
+                          .slice(0, 16)
+                      : ""
+                  }
+                  onChange={(e) =>
+                    setPublishAt(
+                      e.target.value
+                        ? new Date(e.target.value + "+09:00").toISOString()
+                        : "",
+                    )
+                  }
+                />
+                <small>한국 시간. 비워 두면 사이트 다음 실행에 맞춥니다.</small>
+              </label>
+              <button
+                className="button-primary w-full"
+                disabled={!!busy || !ready || !reviewed}
+                onClick={() => void schedule()}
+              >
+                {busy === "schedule"
+                  ? "큐에 저장 중…"
+                  : editingJob
+                    ? "예약 초안 수정·검증"
+                    : "Cloudflare 발행 큐에 등록"}
+              </button>
               <p className="save-explanation">
                 {active.integration === "supabase"
                   ? "초안으로 저장합니다. 실제 공개는 사이트 관리자에서 진행하세요."
-                  : "기존 게시 흐름에 사용할 파일을 만듭니다. 이 버튼은 글을 공개하지 않습니다."}
+                  : "다른 도구로 가져올 파일을 만듭니다. 이 버튼은 글을 공개하지 않습니다."}
               </p>
             </div>
           </section>
@@ -1657,282 +1757,11 @@ function Composer() {
 }
 function Topics() {
   const { active } = useStore();
-  const navigate = useNavigate();
-  const [items, setItems] = useState<
-    { id: string; title: string; category: string; note: string }[]
-  >([]);
-  const [title, setTitle] = useState("");
-  const [category, setCategory] = useState(active.categories[0]);
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const load = useCallback(async () => {
-    try {
-      const r = await api<{ topics: typeof items }>(
-        `topics?site_id=${active.site_id}`,
-      );
-      setItems(r.topics);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, [active.site_id]);
-  useEffect(() => {
-    void load();
-  }, [load]);
-  async function save(e: FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      await api("topics", {
-        method: "POST",
-        body: JSON.stringify({
-          site_id: active.site_id,
-          title,
-          category,
-          note,
-        }),
-      });
-      setTitle("");
-      setNote("");
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div className="studio-page">
-      <Heading
-        eyebrow="AN IDEA WORTH KEEPING"
-        title="다음 글의 씨앗을 모아요."
-        note={`${active.name} 독자에게 전하고 싶은 주제를 기록하세요.`}
-      />
-      {error && <Notice>{error}</Notice>}
-      <div className="composer-layout">
-        <section className="studio-panel">
-          <div className="panel-heading">
-            <h2>
-              아이디어 노트 <span className="subtle-pill">{items.length}</span>
-            </h2>
-          </div>
-          {items.length ? (
-            <div className="idea-list">
-              {items.map((i) => (
-                <article key={i.id}>
-                  <span className="subtle-pill">{i.category}</span>
-                  <h3>{i.title}</h3>
-                  <p>{i.note || "이 주제로 다음 이야기를 시작해 보세요."}</p>
-                  <button
-                    className="button-secondary"
-                    onClick={() =>
-                      navigate(
-                        `/compose?topic=${encodeURIComponent(i.title)}&category=${encodeURIComponent(i.category)}`,
-                      )
-                    }
-                  >
-                    이 주제로 작성 <Icon name="Chevron" size={13} />
-                  </button>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <Empty
-              title="아직 기록한 아이디어가 없어요."
-              note="오른쪽에 주제를 적어 보세요. 떠오른 생각을 다음 글로 이어갈 수 있어요."
-            />
-          )}
-        </section>
-        <form className="studio-panel" onSubmit={save}>
-          <div className="panel-heading">
-            <h2>새 아이디어</h2>
-          </div>
-          <div className="form-body">
-            <label className="field-label">
-              주제
-              <input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                required
-                minLength={3}
-                maxLength={300}
-                placeholder="독자가 궁금해할 질문"
-              />
-            </label>
-            <label className="field-label">
-              카테고리
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-              >
-                {active.categories.map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </select>
-            </label>
-            <label className="field-label">
-              메모
-              <textarea
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                rows={5}
-                maxLength={2000}
-                placeholder="독자, 핵심 내용, 찾아볼 자료…"
-              />
-            </label>
-            <button className="button-primary" disabled={busy}>
-              <Icon name="Plus" /> 아이디어 저장
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
+  return <StrategyTopics active={active} />;
 }
 function Flow() {
   const { active } = useStore();
-  const [runs, setRuns] = useState<
-    {
-      id: number;
-      display_title: string;
-      status: string;
-      conclusion: string | null;
-      html_url: string;
-      created_at: string;
-    }[]
-  >([]);
-  const [configured, setConfigured] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [dry, setDry] = useState(true);
-  const [note, setNote] = useState("");
-  const [error, setError] = useState("");
-  useEffect(() => {
-    if (active.integration === "asty")
-      api<{ runs: typeof runs; configured: boolean }>("pipeline")
-        .then((r) => {
-          setRuns(r.runs);
-          setConfigured(r.configured);
-        })
-        .catch((e) => setError(e.message));
-  }, [active.integration]);
-  async function trigger() {
-    setBusy(true);
-    setError("");
-    try {
-      await api("pipeline", {
-        method: "POST",
-        body: JSON.stringify({
-          site_id: active.site_id,
-          limit: 3,
-          dry_run: dry,
-        }),
-      });
-      setNote(
-        "기존 파이프라인 실행을 요청했습니다. GitHub에서 결과를 확인하세요.",
-      );
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div className="studio-page">
-      <Heading
-        eyebrow="FROM IDEA TO PUBLISHED"
-        title={`${active.name}의 발행 흐름`}
-        note={
-          active.integration === "blogger"
-            ? "영어·일본어 한 쌍과 기존 격일 aside 루틴이 연결됩니다."
-            : "초안을 준비하고 검토한 뒤 독자에게 공개합니다."
-        }
-      />
-      <Workflow />
-      {error && <Notice>{error}</Notice>}
-      {note && <div className="success-notice">{note}</div>}
-      <section className="studio-panel">
-        <div className="panel-heading">
-          <h2>현재 게시 방식</h2>
-          <span className="status-pill green">
-            {active.integration === "blogger"
-              ? "aside 루틴 연결"
-              : active.integration === "asty"
-                ? "기존 파이프라인"
-                : "초안 저장 연결"}
-          </span>
-        </div>
-        <div className="form-body">
-          <p className="flow-description">
-            {active.integration === "blogger"
-              ? "격일 오전 10시(KST)에 기존 aside 루틴이 초안을 준비합니다. Workboard에서 만든 전달 파일을 기존 브릿지로 가져오고, 이미지·FAQ·언어 링크를 완성한 뒤 기존 승인 절차로 게시하세요."
-              : "Workboard에서는 먼저 초안을 준비합니다. 본문과 출처를 확인한 뒤 해당 사이트 관리자에서 이미지를 다듬고 게시하세요."}
-          </p>
-          <div className="flex gap-3 flex-wrap">
-            <Link to="/compose" className="button-primary">
-              새 글 작성 <Icon name="Edit" />
-            </Link>
-            <a
-              href={active.admin_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="button-secondary"
-            >
-              게시 관리자 <Icon name="External" />
-            </a>
-          </div>
-        </div>
-      </section>
-      {active.integration === "asty" && (
-        <section className="studio-panel">
-          <div className="panel-heading">
-            <h2>기존 GitHub 파이프라인</h2>
-            <span className="subtle-pill">
-              {configured ? "연결됨" : "연결 확인 필요"}
-            </span>
-          </div>
-          <div className="form-body">
-            <label className="review-checkbox">
-              <input
-                type="checkbox"
-                checked={dry}
-                onChange={(e) => setDry(e.target.checked)}
-              />
-              읽기 전용 점검으로 실행
-            </label>
-            <button
-              className="button-secondary"
-              onClick={() => void trigger()}
-              disabled={busy || !configured}
-            >
-              {busy ? "요청 중…" : "파이프라인 실행"}
-            </button>
-            <div className="run-list">
-              {runs.map((r) => (
-                <a
-                  key={r.id}
-                  href={r.html_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <strong>{r.display_title}</strong>
-                  <span
-                    className={`status-pill ${r.conclusion === "success" ? "green" : "neutral"}`}
-                  >
-                    {r.conclusion ?? r.status}
-                  </span>
-                  <small>
-                    {new Date(r.created_at).toLocaleDateString("ko-KR")}
-                  </small>
-                  <Icon name="External" size={13} />
-                </a>
-              ))}
-            </div>
-          </div>
-        </section>
-      )}
-    </div>
-  );
+  return <AutomationFlow active={active} />;
 }
 function Reports() {
   const [data, setData] = useState<{
@@ -2049,116 +1878,9 @@ function Reports() {
   );
 }
 function Settings() {
-  const { active } = useStore();
-  const [data, setData] = useState<Record<string, unknown> | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    api<Record<string, unknown>>("settings")
-      .then(setData)
-      .catch((e) => setError(e.message));
-  }, []);
-  return (
-    <div className="studio-page">
-      <Heading
-        eyebrow="CONNECTED & READY"
-        title="작업실의 연결 상태."
-        note="필요한 연결이 준비되어 있는지 한눈에 확인하세요."
-      />
-      {error && <Notice>{error}</Notice>}
-      <section className="studio-panel">
-        <div className="panel-heading">
-          <h2>운영 연결</h2>
-          <span className="subtle-pill">Cloudflare Pages</span>
-        </div>
-        <div className="settings-grid">
-          {[
-            [
-              "database_ready",
-              "작업 기록",
-              "초안 전송과 AI 예산을 안전하게 기록합니다.",
-              "Doc",
-            ],
-            [
-              "native_ready",
-              "자체 사이트",
-              "Korea by Local·Korea Decode 초안을 연결합니다.",
-              "Globe",
-            ],
-            [
-              "ai_ready",
-              "AI 글 작성",
-              "확인한 자료를 바탕으로 초안 작성을 돕습니다.",
-              "Sparkle",
-            ],
-            [
-              "asty_ready",
-              "ASTY 연결",
-              "기존 콘텐츠와 다국어 운영을 이어갑니다.",
-              "Layers",
-            ],
-            [
-              "github_ready",
-              "GitHub 실행",
-              "기존 파이프라인 실행 상태를 확인합니다.",
-              "Flow",
-            ],
-          ].map(([key, title, note, icon]) => (
-            <article key={key}>
-              <span className="metric-icon green">
-                <Icon name={icon as IconName} size={20} />
-              </span>
-              <div>
-                <h3>{title}</h3>
-                <p>{note}</p>
-              </div>
-              <span
-                className={`status-pill ${data?.[key] ? "green" : "amber"}`}
-              >
-                {data ? (data[key] ? "연결됨" : "설정 필요") : "확인 중"}
-              </span>
-            </article>
-          ))}
-        </div>
-      </section>
-      <section className="studio-panel">
-        <div className="panel-heading">
-          <h2>현재 워크스페이스</h2>
-        </div>
-        <div className="form-body">
-          <div className="setting-row">
-            <span>이름</span>
-            <strong>{active.name}</strong>
-          </div>
-          <div className="setting-row">
-            <span>작성 언어</span>
-            <strong>
-              {active.languages.map((l) => LANGUAGE_LABEL[l] ?? l).join(" · ")}
-            </strong>
-          </div>
-          <div className="setting-row">
-            <span>게시 방식</span>
-            <strong>
-              {active.integration === "blogger"
-                ? "기존 aside 격일 루틴"
-                : active.integration === "supabase"
-                  ? "초안 저장 후 사이트 관리자"
-                  : "기존 ASTY 다국어 파이프라인"}
-            </strong>
-          </div>
-          <a
-            href={active.admin_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="button-secondary"
-          >
-            사이트 관리자 열기 <Icon name="External" size={14} />
-          </a>
-        </div>
-      </section>
-    </div>
-  );
+  const { workspaces, active } = useStore();
+  return <Connections workspaces={workspaces} active={active} />;
 }
-
 function TagField({
   value,
   onChange,

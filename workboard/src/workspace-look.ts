@@ -2,12 +2,6 @@ export const WORKSPACE_LOOK: Record<
   string,
   { initials: string; color: string; soft: string; description: string }
 > = {
-  "asty-cabin": {
-    initials: "AC",
-    color: "#32705d",
-    soft: "#e8f1ec",
-    description: "서울 장기 체류자를 위한 숙소·생활 가이드",
-  },
   "korea-buy-list": {
     initials: "BL",
     color: "#b97039",

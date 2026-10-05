@@ -4,12 +4,17 @@ compatibility_date = "2026-10-05"
 
 [vars]
 NATIVE_BLOG_SUPABASE_URL = "https://agkkvtfwqmzgbrqhvohs.supabase.co"
-ASTY_SITE_URL = "https://asty-cabin-check.vercel.app"
-GITHUB_REPO = "jooyongc/blog-agent-workboard"
 AI_ENABLED = "true"
+PUBLIC_WORKBOARD_URL = "https://blog-agent-workboard.pages.dev"
+KOREABYLOCAL_SITE_URL = "https://koreabylocal.com"
+KOREADECODE_SITE_URL = "https://koreadecode.com"
+BLOGGER_SITE_URL = "https://koreabuylist.blogspot.com"
 
 [[d1_databases]]
 binding = "WORKBOARD_DB"
 database_name = "blog-agent-workboard"
 database_id = "9c2cbd5f-fd44-46a8-9ceb-f007ca2a1759"
 migrations_dir = "workboard/migrations"
+
+[ai]
+binding = "AI"

@@ -1,13 +1,56 @@
-export type Integration = "asty" | "blogger" | "supabase";
+export type Integration = "blogger" | "supabase" | "webhook";
+export type Strategy = {
+  audience: string;
+  voice: string;
+  pillars: string[];
+  entities: string[];
+  source_domains: string[];
+  templates: {
+    title: string;
+    category: string;
+    keyword: string;
+    format: string;
+  }[];
+  min_score: number;
+  required_images: number;
+  affiliate_disclosure: string;
+  gsc_url?: string;
+  gsc_key_env?: string;
+};
+export type Connection = {
+  url_env: string;
+  key_env: string;
+  schema?: string;
+  table?: string;
+  template?: "koreabylocal" | "koreadecode" | "generic";
+  blog_id?: string;
+  client_id_env?: string;
+  client_secret_env?: string;
+  refresh_token_env?: string;
+};
+export type Schedule = {
+  enabled: boolean;
+  interval_days: number;
+  hour_kst: number;
+  minute: number;
+  next_run: string;
+  mode: "draft" | "publish";
+  auto_generate: boolean;
+};
 export type Workspace = {
   site_id: string;
   name: string;
   site_url: string;
+  article_path?: string;
+  site_url_env?: string;
   languages: string[];
   categories: string[];
   integration: Integration;
   description: string;
   admin_url: string;
+  strategy: Strategy;
+  connection: Connection;
+  schedule: Schedule;
 };
 export type Post = {
   id: string;
@@ -29,6 +72,10 @@ export type Article = {
   tags: string[];
   content_md: string;
   source_notes?: string;
+  primary_keyword?: string;
+  secondary_keywords?: string[];
+  format?: string;
+  faq?: { question: string; answer: string }[];
 };
 export type DraftInput = {
   request_id: string;
@@ -38,4 +85,11 @@ export type DraftInput = {
   translations: Record<string, Article>;
   featured_image_url?: string;
   reviewed: boolean;
+};
+export type Quality = {
+  score: number;
+  passed: boolean;
+  issues: string[];
+  signals: Record<string, boolean | number>;
+  faq: { question: string; answer: string }[];
 };

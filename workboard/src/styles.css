@@ -2047,3 +2047,35 @@ a {
     flex-wrap: wrap;
   }
 }
+
+.direction-input {
+  width: 100%;
+  border: 1px solid var(--studio-line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fafbf8;
+  resize: vertical;
+}
+.quality-card {
+  padding: 12px;
+  background: #f6f8f2;
+  border-radius: 8px;
+  font-size: 12px;
+  margin: 12px 0;
+}
+.quality-card ul {
+  padding-left: 18px;
+  margin-top: 8px;
+}
+.quality-json {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  max-height: 300px;
+  overflow: auto;
+}
+details summary {
+  cursor: pointer;
+  font-size: 13px;
+  margin: 15px 0;
+}

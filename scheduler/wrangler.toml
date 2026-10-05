@@ -1,0 +1,7 @@
+name = "blog-agent-workboard-scheduler"
+main = "index.ts"
+compatibility_date = "2026-10-05"
+[triggers]
+crons = ["*/15 * * * *"]
+[vars]
+WORKBOARD_URL = "https://blog-agent-workboard.pages.dev"

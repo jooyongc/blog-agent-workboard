@@ -1,23 +1,28 @@
-import { CATALOG, getWorkspace } from "../shared/catalog";
-import type { DraftInput } from "../shared/types";
+import type { DraftInput, Workspace } from "../shared/types";
 import type { Context } from "./env";
 import { authenticated, equalSecret, makeSession, sessionCookie } from "./auth";
+import { json, body, sameOrigin, cookie, HttpError, message } from "./http";
+import { workspace, listWorkspaces, putWorkspace, readiness } from "./registry";
 import {
-  json,
-  body,
-  sameOrigin,
-  cookie,
-  HttpError,
-  message,
-  remote,
-} from "./http";
-import { getPosts, allPosts, saveDraft, astyHeaders } from "./content";
+  getPosts,
+  allPosts,
+  saveDraft,
+  renderMarkdown,
+  validateArticle,
+  validateDraft,
+} from "./content";
 import { generate } from "./ai";
+import { propose, research } from "./strategy";
+import { quality } from "./seo";
+import { enqueue, jobs, tick } from "./automation";
+import { oauthStart, oauthCallback } from "./oauth";
+import { mediaResponse } from "./media";
+import { measure } from "./measurement";
 export async function onRequest({ request, env }: Context): Promise<Response> {
   try {
-    const url = new URL(request.url);
-    const route = url.pathname.replace(/^\/api\/?/, "").replace(/\/$/, "");
-    const method = request.method;
+    const url = new URL(request.url),
+      route = url.pathname.replace(/^\/api\/?/, "").replace(/\/$/, ""),
+      method = request.method;
     if (method !== "GET") sameOrigin(request);
     if (route === "health" && method === "GET")
       return json({
@@ -26,6 +31,21 @@ export async function onRequest({ request, env }: Context): Promise<Response> {
         runtime: "cloudflare-pages",
         database: !!env.WORKBOARD_DB,
       });
+    if (route === "blogger/oauth/callback" && method === "GET")
+      return oauthCallback(env, url);
+    if (route.startsWith("media/") && method === "GET")
+      return mediaResponse(env, route.slice(6));
+    if (route === "internal/scheduler" && method === "POST") {
+      const token =
+        request.headers.get("Authorization")?.replace(/^Bearer /, "") ?? "";
+      if (
+        !env.SCHEDULER_TOKEN ||
+        !(await equalSecret(token, env.SCHEDULER_TOKEN))
+      )
+        throw new HttpError(401, "스케줄러 인증이 필요합니다.");
+      const input = await body<{ dry_run?: boolean }>(request);
+      return json(await tick(env, Date.now(), input.dry_run === true));
+    }
     if (route === "auth/login" && method === "POST") {
       if (
         !env.DASHBOARD_PASSWORD ||
@@ -87,41 +107,112 @@ export async function onRequest({ request, env }: Context): Promise<Response> {
       return json({ ok: true }, 200, {
         "Set-Cookie": sessionCookie(request, "", 0),
       });
-    if (route === "workspaces" && method === "GET") {
-      const activeId = cookie(request, "active_workspace_id");
-      return json({
-        workspaces: CATALOG,
-        active_id: CATALOG.some((w) => w.site_id === activeId)
-          ? activeId
-          : CATALOG[0].site_id,
-      });
+
+    const catalog = await listWorkspaces(env);
+    const active = () => {
+      const id = cookie(request, "active_workspace_id");
+      return catalog.some((w) => w.site_id === id)
+        ? id
+        : (catalog[0]?.site_id ?? "");
+    };
+    if (route === "workspaces" && method === "GET")
+      return json({ workspaces: catalog, active_id: active() });
+    if (route === "workspaces" && ["POST", "PUT"].includes(method)) {
+      const w = await body<Workspace>(request);
+      if (w.schedule?.enabled && !(await readiness(w, env)).ready)
+        throw new HttpError(
+          409,
+          "발행 연결 변수를 설정한 뒤 자동 발행을 켜세요.",
+        );
+      return json(
+        await putWorkspace(env, w, method === "POST"),
+        method === "POST" ? 201 : 200,
+      );
     }
     if (route === "workspaces/active" && method === "POST") {
-      const input = await body<{ site_id: string }>(request);
-      const w = getWorkspace(input.site_id);
+      const w = await workspace(
+        env,
+        (await body<{ site_id: string }>(request)).site_id,
+      );
       return json({ ok: true, site_id: w.site_id }, 200, {
         "Set-Cookie": `active_workspace_id=${w.site_id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000${url.protocol === "https:" ? "; Secure" : ""}`,
       });
     }
-    if (route === "posts" && method === "GET") {
-      const w = getWorkspace(
-        url.searchParams.get("site_id") ||
-          cookie(request, "active_workspace_id") ||
-          "asty-cabin",
+    if (route === "workspaces/archive" && method === "POST") {
+      const w = await workspace(
+        env,
+        (await body<{ site_id: string }>(request)).site_id,
       );
-      return json({ site_id: w.site_id, ...(await getPosts(w, env)) });
+      if (catalog.length <= 1)
+        throw new HttpError(409, "워크스페이스 한 개 이상을 유지하세요.");
+      const pending = await env.WORKBOARD_DB.prepare(
+        "SELECT id FROM content_jobs WHERE site_id=? AND status IN ('researching','generating','ready','publishing') LIMIT 1",
+      )
+        .bind(w.site_id)
+        .first();
+      if (pending)
+        throw new HttpError(
+          409,
+          "진행 중인 작성·예약 작업을 먼저 완료하거나 취소하세요.",
+        );
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE workspace_records SET disabled=1 WHERE site_id=?",
+      )
+        .bind(w.site_id)
+        .run();
+      return json({ ok: true });
+    }
+    if (route === "blogger/oauth/start" && method === "POST") {
+      const i = await body<{ site_id: string }>(request);
+      return json(await oauthStart(env, i.site_id, url.origin));
+    }
+    if (route === "measurement" && method === "GET") {
+      const w = await workspace(
+        env,
+        url.searchParams.get("site_id") || active(),
+      );
+      const r = await env.WORKBOARD_DB.prepare(
+        "SELECT metrics_json FROM site_measurements WHERE site_id=? ORDER BY created_at DESC LIMIT 1",
+      )
+        .bind(w.site_id)
+        .first<{ metrics_json: string }>();
+      return json(
+        r ? JSON.parse(r.metrics_json) : { status: "baseline_needed" },
+      );
+    }
+    if (route === "measurement" && method === "POST") {
+      const w = await workspace(
+        env,
+        (await body<{ site_id: string }>(request)).site_id,
+      );
+      return json(await measure(env, w));
     }
     if (route === "overview" && method === "GET")
       return json({ sites: await allPosts(env) });
-    if (route === "content/preview" && method === "POST") {
-      const input = await body<{ markdown: string }>(request);
-      if (typeof input.markdown !== "string" || input.markdown.length > 60000)
-        throw new HttpError(400, "미리보기 내용을 확인해 주세요.");
-      const { renderMarkdown } = await import("./content");
-      return json({ html: renderMarkdown(input.markdown) });
+    if (route === "posts" && method === "GET") {
+      const w = await workspace(
+        env,
+        url.searchParams.get("site_id") || active(),
+      );
+      return json({ site_id: w.site_id, ...(await getPosts(w, env)) });
     }
-    if (route === "content/draft" && method === "POST")
-      return json(await saveDraft(await body<DraftInput>(request), env));
+    if (route === "content/preview" && method === "POST") {
+      const i = await body<{ markdown: string }>(request);
+      if (typeof i.markdown !== "string" || i.markdown.length > 60000)
+        throw new HttpError(400, "본문을 확인하세요.");
+      return json({ html: renderMarkdown(i.markdown) });
+    }
+    if (route === "content/quality" && method === "POST") {
+      const i = await body<DraftInput>(request),
+        w = await workspace(env, i.site_id);
+      if (w.languages.some((l) => !validateArticle(i.translations?.[l])))
+        throw new HttpError(400, "언어별 글 내용을 확인하세요.");
+      return json({
+        quality: Object.fromEntries(
+          w.languages.map((l) => [l, quality(i.translations[l], w, l)]),
+        ),
+      });
+    }
     if (route === "content/generate" && method === "POST")
       return json(
         await generate(
@@ -129,165 +220,190 @@ export async function onRequest({ request, env }: Context): Promise<Response> {
           env,
         ),
       );
-    if (route === "settings" && method === "GET")
-      return json({
-        runtime: "Cloudflare Pages",
-        ai_ready:
-          env.AI_ENABLED === "true" &&
-          !!env.ANTHROPIC_API_KEY &&
-          !!env.WORKBOARD_DB,
-        native_ready: !!env.NATIVE_BLOG_SUPABASE_KEY,
-        asty_ready: !!env.ASTY_AGENT_API_KEY,
-        github_ready: !!env.GITHUB_TOKEN,
-        blogger_owner: "aside-browser",
-        database_ready: !!env.WORKBOARD_DB,
-      });
-    if (route === "reports" && method === "GET") {
-      const month = new Date(Date.now() + 9 * 3600000)
-        .toISOString()
-        .slice(0, 7);
-      const [runs, ideas] = await Promise.all([
-        env.WORKBOARD_DB.prepare(
-          "SELECT id,article_key,reserved,actual,status,created_at FROM ai_runs ORDER BY created_at DESC LIMIT 100",
-        ).all(),
-        env.WORKBOARD_DB.prepare(
-          "SELECT id,site_id,title,category,note,status,created_at FROM topic_ideas ORDER BY created_at DESC LIMIT 100",
-        ).all(),
-      ]);
-      const budget = await env.WORKBOARD_DB.prepare(
-        "SELECT COALESCE(SUM(reserved),0) AS reserved,COALESCE(SUM(actual),0) AS actual FROM ai_runs WHERE month=?",
-      )
-        .bind(month)
-        .first();
-      return json({ runs: runs.results, ideas: ideas.results, budget, month });
-    }
-    if (route === "topics" && method === "GET") {
-      const site = getWorkspace(
-        url.searchParams.get("site_id") ?? CATALOG[0].site_id,
+    if (route === "content/draft" && method === "POST")
+      return json(await saveDraft(await body<DraftInput>(request), env));
+    if (route === "content/schedule" && method === "POST")
+      return json(
+        await enqueue(
+          env,
+          await body<DraftInput & { publish_at?: string }>(request),
+        ),
+        201,
       );
-      const result = await env.WORKBOARD_DB.prepare(
-        "SELECT * FROM topic_ideas WHERE site_id=? ORDER BY created_at DESC LIMIT 100",
-      )
-        .bind(site.site_id)
-        .all();
-      return json({ topics: result.results });
-    }
-    if (route === "topics" && method === "POST") {
-      const input = await body<{
+    if (route === "strategy/propose" && method === "POST")
+      return json(
+        await propose(env, await body<Parameters<typeof propose>[1]>(request)),
+      );
+    if (route === "strategy/research" && method === "POST") {
+      const i = await body<{
         site_id: string;
         title: string;
         category: string;
-        note?: string;
       }>(request);
-      const w = getWorkspace(input.site_id);
+      const w = await workspace(env, i.site_id);
       if (
-        typeof input.title !== "string" ||
-        input.title.trim().length < 3 ||
-        input.title.length > 300 ||
-        !w.categories.includes(input.category) ||
-        (input.note?.length ?? 0) > 2000
+        typeof i.title !== "string" ||
+        i.title.length > 300 ||
+        !w.categories.includes(i.category)
       )
-        throw new HttpError(400, "주제 이름과 카테고리를 확인해 주세요.");
+        throw new HttpError(400, "주제를 확인하세요.");
+      return json(await research(env, i.site_id, i.title, i.category));
+    }
+    if (route === "topics" && method === "GET") {
+      const w = await workspace(
+        env,
+        url.searchParams.get("site_id") || active(),
+      );
+      const r = await env.WORKBOARD_DB.prepare(
+        "SELECT * FROM topic_ideas WHERE site_id=? ORDER BY created_at DESC LIMIT 100",
+      )
+        .bind(w.site_id)
+        .all();
+      return json({ topics: r.results });
+    }
+    if (route === "topics" && method === "POST") {
+      const i = await body<{
+          site_id: string;
+          title: string;
+          category: string;
+          note?: string;
+          brief?: unknown;
+          status?: string;
+        }>(request),
+        w = await workspace(env, i.site_id);
+      if (
+        typeof i.title !== "string" ||
+        i.title.trim().length < 3 ||
+        i.title.length > 300 ||
+        !w.categories.includes(i.category) ||
+        typeof (i.note ?? "") !== "string" ||
+        (i.note?.length ?? 0) > 2000
+      )
+        throw new HttpError(400, "주제와 카테고리를 확인하세요.");
       const id = crypto.randomUUID();
       await env.WORKBOARD_DB.prepare(
-        "INSERT INTO topic_ideas(id,site_id,title,category,note,created_at) VALUES(?,?,?,?,?,?)",
+        "INSERT INTO topic_ideas(id,site_id,title,category,note,status,brief_json,created_at) VALUES(?,?,?,?,?,?,?,?)",
       )
         .bind(
           id,
           w.site_id,
-          input.title.trim(),
-          input.category,
-          input.note ?? "",
+          i.title.trim(),
+          i.category,
+          i.note ?? "",
+          i.status === "approved" ? "approved" : "proposed",
+          JSON.stringify(i.brief ?? {}),
           new Date().toISOString(),
         )
         .run();
       return json({ id }, 201);
     }
-    if (route === "pipeline" && method === "GET") {
-      if (!env.GITHUB_TOKEN) return json({ runs: [], configured: false });
-      const repo = env.GITHUB_REPO ?? "jooyongc/blog-agent-workboard";
-      const res = await remote(
-        `https://api.github.com/repos/${repo}/actions/workflows/weekly.yml/runs?per_page=5`,
-        {
-          headers: {
-            Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-            Accept: "application/vnd.github+json",
-            "User-Agent": "blog-agent-workboard",
-          },
-        },
+    if (route === "topics/status" && method === "POST") {
+      const i = await body<{ id: string; site_id: string; status: string }>(
+        request,
       );
-      if (!res.ok)
-        return json({
-          runs: [],
-          configured: true,
-          error: "GitHub 실행 기록 연결을 확인해 주세요.",
-        });
-      const j = (await res.json()) as { workflow_runs: unknown[] };
-      return json({ runs: j.workflow_runs, configured: true });
-    }
-    if (route === "pipeline" && method === "POST") {
-      const input = await body<{
-        site_id: string;
-        limit: number;
-        dry_run: boolean;
-      }>(request);
-      const w = getWorkspace(input.site_id);
-      if (w.integration !== "asty")
-        throw new HttpError(
-          409,
-          "이 사이트는 글 작성 화면의 전용 흐름을 사용합니다.",
-        );
-      if (!env.GITHUB_TOKEN)
-        throw new HttpError(503, "GitHub 실행 연결을 확인해 주세요.");
-      if (
-        !Number.isInteger(input.limit) ||
-        input.limit < 1 ||
-        input.limit > 5 ||
-        typeof input.dry_run !== "boolean"
+      await workspace(env, i.site_id);
+      if (!["approved", "proposed", "archived"].includes(i.status))
+        throw new HttpError(400, "주제 상태를 확인하세요.");
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE topic_ideas SET status=? WHERE id=? AND site_id=?",
       )
-        throw new HttpError(400, "실행 설정을 확인해 주세요.");
-      const res = await remote(
-        `https://api.github.com/repos/${env.GITHUB_REPO ?? "jooyongc/blog-agent-workboard"}/actions/workflows/weekly.yml/dispatches`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-            Accept: "application/vnd.github+json",
-            "User-Agent": "blog-agent-workboard",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            ref: "main",
-            inputs: {
-              site_id: w.site_id,
-              limit: String(input.limit),
-              dry_run: String(input.dry_run),
-            },
-          }),
-        },
-      );
-      if (!res.ok)
-        throw new HttpError(502, "GitHub 실행 요청을 처리하지 못했습니다.");
+        .bind(i.status, i.id, i.site_id)
+        .run();
       return json({ ok: true });
     }
-    if (route === "legacy/queue" && method === "GET") {
-      const res = await remote(
-        `${env.ASTY_SITE_URL ?? CATALOG[0].site_url}/api/admin/queue/export?site_id=asty-cabin`,
-        { headers: astyHeaders(env) },
+    if (route === "automation" && method === "GET") {
+      const id = url.searchParams.get("site_id") || active();
+      const w = await workspace(env, id);
+      const r = await env.WORKBOARD_DB.prepare(
+        "SELECT * FROM scheduler_runs WHERE site_id=? ORDER BY created_at DESC LIMIT 30",
+      )
+        .bind(id)
+        .all();
+      return json({
+        workspace: w,
+        connection: await readiness(w, env),
+        jobs: await jobs(env, id),
+        runs: r.results,
+      });
+    }
+    if (route === "automation/check" && method === "POST")
+      return json(await tick(env, Date.now(), true));
+    if (route === "jobs/update" && method === "POST") {
+      const i = await body<{
+          id: string;
+          input: DraftInput;
+          publish_at: string;
+        }>(request),
+        w = await workspace(env, i.input.site_id);
+      validateDraft(i.input, w);
+      const existing = await env.WORKBOARD_DB.prepare(
+        "SELECT slug FROM content_jobs WHERE id=? AND site_id=? AND status IN ('review','ready')",
+      )
+        .bind(i.id, w.site_id)
+        .first<{ slug: string }>();
+      if (!existing || existing.slug !== i.input.slug)
+        throw new HttpError(409, "예약 글 주소는 변경할 수 없습니다.");
+      const scores = Object.fromEntries(
+        w.languages.map((l) => [l, quality(i.input.translations[l], w, l)]),
       );
-      if (!res.ok)
-        throw new HttpError(502, "기존 승인 대기열 연결을 확인해 주세요.");
-      return json(await res.json());
+      const pass =
+        i.input.reviewed === true &&
+        Object.values(scores).every((q) => q.passed);
+      if (!Number.isFinite(Date.parse(i.publish_at)))
+        throw new HttpError(400, "예약 시간을 확인하세요.");
+      const result = await env.WORKBOARD_DB.prepare(
+        "UPDATE content_jobs SET request_json=?,article_json=?,quality_json=?,status=?,publish_at=?,updated_at=? WHERE id=? AND site_id=? AND status IN ('review','ready')",
+      )
+        .bind(
+          JSON.stringify(i.input),
+          JSON.stringify(i.input.translations),
+          JSON.stringify(scores),
+          pass ? "ready" : "review",
+          i.publish_at,
+          new Date().toISOString(),
+          i.id,
+          w.site_id,
+        )
+        .run();
+      if (!result.meta.changes)
+        throw new HttpError(409, "수정 가능한 검토 초안이 아닙니다.");
+      return json({ quality: scores, status: pass ? "ready" : "review" });
+    }
+    if (route === "jobs/cancel" && method === "POST") {
+      const i = await body<{ id: string; site_id: string }>(request);
+      await workspace(env, i.site_id);
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE content_jobs SET status='cancelled' WHERE id=? AND site_id=? AND status IN ('review','ready','queued')",
+      )
+        .bind(i.id, i.site_id)
+        .run();
+      return json({ ok: true });
+    }
+    if (route === "settings" && method === "GET")
+      return json({
+        runtime: "Cloudflare Pages + Cron Worker",
+        ai_ready: env.AI_ENABLED === "true" && !!env.ANTHROPIC_API_KEY,
+        database_ready: !!env.WORKBOARD_DB,
+        workspaces: await Promise.all(catalog.map((w) => readiness(w, env))),
+        scheduler: "blog-agent-workboard-scheduler",
+        blogger_owner: "cloudflare",
+      });
+    if (route === "reports" && method === "GET") {
+      const month = new Date(Date.now() + 9 * 3600000)
+        .toISOString()
+        .slice(0, 7);
+      const runs = await env.WORKBOARD_DB.prepare(
+        "SELECT * FROM ai_runs ORDER BY created_at DESC LIMIT 100",
+      ).all();
+      const budget = await env.WORKBOARD_DB.prepare(
+        "SELECT COALESCE(SUM(reserved),0) AS reserved,COALESCE(SUM(actual),0) AS actual FROM ai_runs WHERE month=?",
+      )
+        .bind(month)
+        .first();
+      return json({ runs: runs.results, budget, month });
     }
     throw new HttpError(404, "요청한 기능을 찾지 못했습니다.");
-  } catch (error) {
-    return json(
-      { error: message(error) },
-      error instanceof HttpError
-        ? error.status
-        : error instanceof Error && error.message === "Unknown workspace"
-          ? 400
-          : 500,
-    );
+  } catch (e) {
+    return json({ error: message(e) }, e instanceof HttpError ? e.status : 500);
   }
 }
