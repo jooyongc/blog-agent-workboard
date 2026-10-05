@@ -166,6 +166,7 @@ export async function advanceHarness(env: Env) {
           research: payload.research.research,
           seo: { briefs: payload.research.briefs, repair: payload.repair },
           attach_images: false,
+          target_languages: payload.repair?.target_languages,
         },
         env,
       );
@@ -174,12 +175,17 @@ export async function advanceHarness(env: Env) {
         slug: payload.slug,
         category: payload.category,
         request_id: task.job_id,
-        translations: result.translations,
+        translations: {
+          ...(payload.input?.translations || {}),
+          ...result.translations,
+        },
         reviewed: true,
       } satisfies DraftInput;
     }
     if (task.stage === "photo_editor") {
-      if (!payload.input.translations[w.languages[0]].images?.length)
+      if (
+        w.languages.some((l) => !payload.input.translations[l].images?.length)
+      )
         payload.input.translations = await illustrate(
           env,
           w,

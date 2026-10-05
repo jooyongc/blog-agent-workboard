@@ -129,7 +129,29 @@ export async function publishJob(
       await finish(env, jobId, lang, "create", row);
     }
     for (const lang of w.languages) {
-      if (await receipt(env, jobId, lang, "package")) continue;
+      const hash = Array.from(
+        new Uint8Array(
+          await crypto.subtle.digest(
+            "SHA-256",
+            new TextEncoder().encode(
+              JSON.stringify({
+                article: input.translations[lang],
+                featured_image: input.featured_image_url,
+                drafts,
+                site_url: w.site_url,
+              }),
+            ),
+          ),
+        ),
+      )
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("");
+      const packaged = await receipt(env, jobId, lang, "package");
+      if (
+        packaged?.remote_json &&
+        JSON.parse(packaged.remote_json).hash === hash
+      )
+        continue;
       const row = drafts[lang];
       const other = w.languages
         .filter((l) => l !== lang)
@@ -162,6 +184,7 @@ export async function publishJob(
         content: string;
         labels: string[];
         status?: string;
+        title?: string;
       };
       if (
         !verify.ok ||
@@ -169,10 +192,11 @@ export async function publishJob(
         !saved.content.includes("application/ld+json") ||
         !Array.isArray(saved.labels) ||
         (mode === "draft" && saved.status !== "DRAFT") ||
+        saved.title !== input.translations[lang].title ||
         !saved.labels.includes(lang === "ja" ? "日本語" : "English")
       )
         throw new HttpError(502, "Blogger 저장 재검증에 실패했습니다.");
-      await finishPackage(env, jobId, lang);
+      await finishPackage(env, jobId, lang, hash);
     }
     if (mode === "publish")
       for (const lang of w.languages) {
@@ -308,10 +332,10 @@ export async function publishJob(
   }
   return { mode, posts: { [lang]: created } };
 }
-async function finishPackage(env: Env, id: string, lang: string) {
+async function finishPackage(env: Env, id: string, lang: string, hash: string) {
   await env.WORKBOARD_DB.prepare(
-    "INSERT INTO publication_receipts(job_id,lang,phase,remote_json,updated_at) VALUES(?,?,'package','{}',?)",
+    "INSERT INTO publication_receipts(job_id,lang,phase,remote_json,updated_at) VALUES(?,?,'package',?,?) ON CONFLICT(job_id,lang,phase) DO UPDATE SET remote_json=excluded.remote_json,updated_at=excluded.updated_at",
   )
-    .bind(id, lang, new Date().toISOString())
+    .bind(id, lang, JSON.stringify({ hash }), new Date().toISOString())
     .run();
 }

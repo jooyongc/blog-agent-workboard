@@ -93,6 +93,16 @@ export function quality(article: Article, w: Workspace, lang: string): Quality {
     (signals.freshness ? 5 : 0) +
     (!/\*\*(?!Q:)[^*]+\*\*/.test(md) ? 5 : 0);
   const issues: string[] = [];
+  if (lang === "ja") {
+    const japanese = (value: string) =>
+      (value.match(/[\u3040-\u30ff\u3400-\u9fff]/g) || []).length;
+    if (japanese(article.title) < 3)
+      issues.push("일본어 제목을 자연스러운 일본어로 작성하세요.");
+    if (japanese(article.meta_description) < 10)
+      issues.push("일본어 검색 설명을 자연스러운 일본어로 작성하세요.");
+    if (japanese(md) < 50 || japanese(md) / Math.max(1, md.length) < 0.1)
+      issues.push("일본어 본문이 일본어로 작성되지 않았습니다.");
+  }
   if (!quick) issues.push("Quick Answer가 없습니다.");
   if (question < 3) issues.push("질문형 H2를 3개 이상 준비하세요.");
   if (faq.length < 3 || faq.length > 5)

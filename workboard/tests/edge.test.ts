@@ -1274,3 +1274,21 @@ test("Blogger private draft packaging verifies ADMIN view and replay keeps IDs",
     globalThis.fetch = original;
   }
 });
+
+test("Japanese labels never make an English article pass Japanese quality", async () => {
+  const { env } = environment();
+  const w = await workspace(env, "korea-buy-list");
+  const article = {
+    title: "Korea Duty-Free Shopping",
+    meta_description: "English description of Korean tax refunds",
+    tags: [],
+    content_md:
+      "## Quick Answer\n" +
+      Array(50).fill("English").join(" ") +
+      "\n## What is it?\nDefinition\n## How?\nSteps\n## Why?\nReasons\nQ: One?\nA: Yes.\nQ: Two?\nA: Yes.\nQ: Three?\nA: Yes.\nLast updated: 2026-10-06",
+  };
+  const result = quality(article, w, "ja");
+  assert.equal(result.passed, false);
+  assert.ok(result.issues.some((x) => x.includes("일본어 본문")));
+  assert.ok(result.issues.some((x) => x.includes("일본어 제목")));
+});
