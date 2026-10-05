@@ -22,7 +22,7 @@ import {
   researchEvidence,
 } from "./automation";
 import { oauthStart, oauthCallback } from "./oauth";
-import { mediaResponse,stockPhotos } from "./media";
+import { mediaResponse, stockPhotos } from "./media";
 import { advanceHarness, enqueueApproved } from "./harness";
 import { measure } from "./measurement";
 import { fireflyReady } from "./firefly";
@@ -117,27 +117,101 @@ export async function onRequest({
     }
     if (!(await authenticated(request, env)))
       throw new HttpError(401, "로그인이 필요합니다.");
-    if(route === "media-library/search" && method === "GET"){
-      const w=await workspace(env,url.searchParams.get("site_id")||"");
-      const query=url.searchParams.get("query")||w.strategy.pillars[0];if(query.length>200)throw new HttpError(400,"검색어를 확인하세요.");
-      return json({photos:await stockPhotos(env,query,2,w.site_id)});
+    if (route === "media-library/search" && method === "GET") {
+      const w = await workspace(env, url.searchParams.get("site_id") || "");
+      const query = url.searchParams.get("query") || w.strategy.pillars[0];
+      if (query.length > 200) throw new HttpError(400, "검색어를 확인하세요.");
+      return json({ photos: await stockPhotos(env, query, 2, w.site_id) });
     }
-    if(route === "media-library" && method === "GET"){
-      const site=url.searchParams.get("site_id")||"";await workspace(env,site);return json({assets:(await env.WORKBOARD_DB.prepare("SELECT * FROM reusable_media WHERE site_id=? ORDER BY created_at DESC LIMIT 100").bind(site).all()).results});
+    if (route === "media-library" && method === "GET") {
+      const site = url.searchParams.get("site_id") || "";
+      await workspace(env, site);
+      return json({
+        assets: (
+          await env.WORKBOARD_DB.prepare(
+            "SELECT * FROM reusable_media WHERE site_id=? ORDER BY created_at DESC LIMIT 100",
+          )
+            .bind(site)
+            .all()
+        ).results,
+      });
     }
-    if(route === "media-library/upload" && method === "POST"){
-      const form=await request.formData();const w=await workspace(env,String(form.get("site_id")||""));const file=form.get("file");
-      const title=String(form.get("title")||"").trim(),provider=String(form.get("provider")||""),reference=String(form.get("license_reference")||"").trim();
-      const allowed=["image/jpeg","image/png","video/mp4","video/quicktime"];
-      if(!(file instanceof File)|| !allowed.includes(file.type) || file.size>50*1024*1024 || !title || title.length>300 || !["Adobe Stock","Adobe Firefly"].includes(provider) || (provider==="Adobe Stock" && !reference))throw new HttpError(400,"파일 형식·제목·Adobe 라이선스 근거를 확인하세요.");
-      const id=crypto.randomUUID(),extension=({"image/jpeg":"jpg","image/png":"png","video/mp4":"mp4","video/quicktime":"mov":"webm"} as Record<string,string>)[file.type];
-      const base=String(env.NATIVE_BLOG_SUPABASE_URL)+"/storage/v1",path="library/"+id+"."+extension;
-      const response=await fetch(base+"/object/workboard-media/"+path,{method:"POST",headers:{apikey:String(env.NATIVE_BLOG_SUPABASE_KEY),Authorization:"Bearer "+String(env.NATIVE_BLOG_SUPABASE_KEY),"Content-Type":file.type},body:await file.arrayBuffer(),signal:AbortSignal.timeout(60000)});
-      if(!response.ok)throw new HttpError(502,"미디어 원본 저장 실패");
-      const source=provider==="Adobe Firefly"?"https://www.adobe.com/products/firefly.html":"https://stock.adobe.com/license-terms";
-      const tags=String(form.get("tags")||"").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean).slice(0,20);
-      await env.WORKBOARD_DB.prepare("INSERT INTO reusable_media(id,site_id,provider,kind,title,tags_json,url,source_url,license_reference,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)").bind(id,w.site_id,provider,file.type.startsWith("video/")?"video":"photo",title,JSON.stringify(tags),base+"/object/public/workboard-media/"+path,source,provider==="Adobe Firefly"?"User-created Firefly asset":reference,new Date().toISOString()).run();
-      return json({id},201);
+    if (route === "media-library/upload" && method === "POST") {
+      const form = await request.formData();
+      const w = await workspace(env, String(form.get("site_id") || ""));
+      const file = form.get("file");
+      const title = String(form.get("title") || "").trim(),
+        provider = String(form.get("provider") || ""),
+        reference = String(form.get("license_reference") || "").trim();
+      const allowed = [
+        "image/jpeg",
+        "image/png",
+        "video/mp4",
+        "video/quicktime",
+      ];
+      if (
+        !(file instanceof File) ||
+        !allowed.includes(file.type) ||
+        file.size > 50 * 1024 * 1024 ||
+        !title ||
+        title.length > 300 ||
+        !["Adobe Stock", "Adobe Firefly"].includes(provider) ||
+        (provider === "Adobe Stock" && !reference)
+      )
+        throw new HttpError(
+          400,
+          "파일 형식·제목·Adobe 라이선스 근거를 확인하세요.",
+        );
+      const id = crypto.randomUUID(),
+        extension = (
+          {
+            "image/jpeg": "jpg",
+            "image/png": "png",
+            "video/mp4": "mp4",
+            "video/quicktime": "mov",
+          } as Record<string, string>
+        )[file.type];
+      const base = String(env.NATIVE_BLOG_SUPABASE_URL) + "/storage/v1",
+        path = "library/" + id + "." + extension;
+      const response = await fetch(base + "/object/workboard-media/" + path, {
+        method: "POST",
+        headers: {
+          apikey: String(env.NATIVE_BLOG_SUPABASE_KEY),
+          Authorization: "Bearer " + String(env.NATIVE_BLOG_SUPABASE_KEY),
+          "Content-Type": file.type,
+        },
+        body: await file.arrayBuffer(),
+        signal: AbortSignal.timeout(60000),
+      });
+      if (!response.ok) throw new HttpError(502, "미디어 원본 저장 실패");
+      const source =
+        provider === "Adobe Firefly"
+          ? "https://www.adobe.com/products/firefly.html"
+          : "https://stock.adobe.com/license-terms";
+      const tags = String(form.get("tags") || "")
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean)
+        .slice(0, 20);
+      await env.WORKBOARD_DB.prepare(
+        "INSERT INTO reusable_media(id,site_id,provider,kind,title,tags_json,url,source_url,license_reference,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+      )
+        .bind(
+          id,
+          w.site_id,
+          provider,
+          file.type.startsWith("video/") ? "video" : "photo",
+          title,
+          JSON.stringify(tags),
+          base + "/object/public/workboard-media/" + path,
+          source,
+          provider === "Adobe Firefly"
+            ? "User-created Firefly asset"
+            : reference,
+          new Date().toISOString(),
+        )
+        .run();
+      return json({ id }, 201);
     }
     if (route === "auth/session" && method === "GET")
       return json({ authenticated: true });
