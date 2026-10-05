@@ -2,6 +2,7 @@ import type { Env } from "./env";
 import type { Workspace } from "../shared/types";
 import { remote } from "./http";
 import { getPosts } from "./content";
+import { articleUrl } from "./registry";
 export async function measure(env: Env, w: Workspace) {
   const pages = await getPosts(w, env).catch(() => ({ posts: [] }));
   const article = pages.posts.find(
@@ -14,7 +15,7 @@ export async function measure(env: Env, w: Workspace) {
     ["robots", w.site_url + "/robots.txt"],
     ["sitemap", w.site_url + "/sitemap.xml"],
     ["llms", w.site_url + "/llms.txt"],
-    ["missing", w.site_url + "/workboard-nonexistent-page-991d7"],
+    ["missing", w.integration === "supabase" ? articleUrl(w, "workboard-nonexistent-page-991d7") : w.site_url + "/workboard-nonexistent-page-991d7"],
   ];
   for (const [label, url] of targets) {
     if (!url) continue;
