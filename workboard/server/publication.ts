@@ -155,14 +155,20 @@ export async function publishJob(
       });
       if (!r.ok)
         throw new HttpError(502, "Blogger 구조화 데이터 저장을 확인하세요.");
-      const verify = await remote(base + "/" + row.id, { headers });
+      const verify = await remote(base + "/" + row.id + "?view=ADMIN", {
+        headers,
+      });
       const saved = (await verify.json()) as {
         content: string;
         labels: string[];
+        status?: string;
       };
       if (
         !verify.ok ||
+        typeof saved.content !== "string" ||
         !saved.content.includes("application/ld+json") ||
+        !Array.isArray(saved.labels) ||
+        (mode === "draft" && saved.status !== "DRAFT") ||
         !saved.labels.includes(lang === "ja" ? "日本語" : "English")
       )
         throw new HttpError(502, "Blogger 저장 재검증에 실패했습니다.");

@@ -5,10 +5,12 @@ import {
   publicHttps,
   variable,
   articleUrl,
+  readiness,
 } from "./registry";
 import type { Workspace, Post, DraftInput, Article } from "../shared/types";
 import type { Env } from "./env";
 import { HttpError, remote, validSlug } from "./http";
+import { bloggerToken } from "./publication";
 function esc(s: string) {
   return s.replace(
     /[&<>"']/g,
@@ -67,6 +69,73 @@ export function connection(w: Workspace, env: Env) {
 }
 export async function getPosts(w: Workspace, env: Env) {
   if (w.integration === "blogger") {
+    if ((await readiness(w, env)).ready) {
+      const token = await bloggerToken(w, env);
+      const posts: Post[] = [];
+      let pageToken: string | undefined;
+      for (let page = 0; page < 5; page++) {
+        const query = new URLSearchParams({
+          view: "ADMIN",
+          fetchBodies: "false",
+          maxResults: "150",
+          orderBy: "updated",
+        });
+        for (const status of ["draft", "live", "scheduled"])
+          query.append("status", status);
+        if (pageToken) query.set("pageToken", pageToken);
+        const res = await remote(
+          `https://www.googleapis.com/blogger/v3/blogs/${w.connection.blog_id}/posts?${query}`,
+          { headers: { Authorization: "Bearer " + token } },
+        );
+        if (!res.ok)
+          throw new HttpError(
+            502,
+            "Blogger 관리자 글 목록을 조회하지 못했습니다. Google 연결 상태를 확인하세요.",
+          );
+        const data = (await res.json()) as {
+          nextPageToken?: string;
+          items?: {
+            id: string;
+            title: string;
+            labels?: string[];
+            status: string;
+            published: string;
+            updated: string;
+            url: string;
+          }[];
+        };
+        for (const item of data.items ?? []) {
+          const status =
+            item.status === "DRAFT"
+              ? "draft"
+              : item.status === "SCHEDULED"
+                ? "scheduled"
+                : "published";
+          posts.push({
+            id: item.id,
+            slug: item.id,
+            title: item.title,
+            categoryId: item.labels?.join(", ") ?? "",
+            canonicalLang: item.labels?.includes("日本語") ? "ja" : "en",
+            status,
+            createdAt: item.published || item.updated,
+            updatedAt: item.updated,
+            publishAt: status === "draft" ? null : item.published,
+            publishedAt: status === "published" ? item.published : null,
+            url:
+              status === "published"
+                ? item.url
+                : `https://www.blogger.com/blog/post/edit/${w.connection.blog_id}/${item.id}`,
+          });
+        }
+        pageToken = data.nextPageToken;
+        if (!pageToken) break;
+      }
+      return {
+        posts,
+        ...(pageToken ? { warning: "최근 750개 글까지 조회했습니다." } : {}),
+      };
+    }
     const res = await remote(
       `${w.site_url}/feeds/posts/summary?alt=json&max-results=150`,
     );

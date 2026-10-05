@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { getPosts } from "../server/content";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
@@ -1166,6 +1167,109 @@ test("publisher checks current article quality before any remote delivery", asyn
         .get()?.status,
       "failed",
     );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("connected Blogger lists draft and live posts with ADMIN view", async () => {
+  const { env } = environment();
+  env.BLOGGER_ACCESS_TOKEN = "test-token";
+  const w = structuredClone(CATALOG[0]);
+  const original = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const u = new URL(String(input));
+    assert.equal(u.searchParams.get("view"), "ADMIN");
+    assert.deepEqual(u.searchParams.getAll("status"), [
+      "draft",
+      "live",
+      "scheduled",
+    ]);
+    return Response.json({
+      items: [
+        {
+          id: "draft-id",
+          title: "日本語 draft",
+          labels: ["日本語"],
+          status: "DRAFT",
+          published: "2026-10-06",
+          updated: "2026-10-06",
+          url: "https://example.blogspot.com/draft",
+        },
+        {
+          id: "live-id",
+          title: "English live",
+          labels: ["English"],
+          status: "LIVE",
+          published: "2026-10-06",
+          updated: "2026-10-06",
+          url: "https://example.blogspot.com/live",
+        },
+      ],
+    });
+  };
+  try {
+    const result = await getPosts(w, env);
+    assert.equal(result.posts[0].status, "draft");
+    assert.equal(result.posts[0].canonicalLang, "ja");
+    assert.ok(result.posts[0].url?.includes("blogger.com/blog/post/edit"));
+    assert.equal(result.posts[1].status, "published");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+test("Blogger private draft packaging verifies ADMIN view and replay keeps IDs", async () => {
+  const { env } = environment();
+  env.BLOGGER_ACCESS_TOKEN = "test-token";
+  const w = structuredClone(CATALOG[0]);
+  const original = globalThis.fetch;
+  let creations = 0;
+  const rows = new Map<string, any>();
+  const input = {
+    site_id: w.site_id,
+    slug: "bilingual-draft",
+    category: w.categories[0],
+    request_id: "admin-draft",
+    reviewed: true,
+    translations: Object.fromEntries(
+      w.languages.map((lang) => [
+        lang,
+        {
+          title: lang + " article",
+          meta_description: "description",
+          tags: [],
+          content_md: "## Quick Answer\nA short introductory answer.",
+        },
+      ]),
+    ),
+  } as DraftInput;
+  globalThis.fetch = async (input, init) => {
+    const u = new URL(String(input));
+    if (init?.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      const id = String(++creations);
+      const row = {
+        ...body,
+        id,
+        url: "https://example.blogspot.com/" + id,
+        status: "DRAFT",
+      };
+      rows.set(id, row);
+      return Response.json(row);
+    }
+    const id = u.pathname.split("/").pop()!;
+    if (init?.method === "PUT") {
+      rows.set(id, { ...rows.get(id), ...JSON.parse(String(init.body)) });
+      return Response.json(rows.get(id));
+    }
+    assert.equal(u.searchParams.get("view"), "ADMIN");
+    return Response.json(rows.get(id));
+  };
+  try {
+    const first = await publishJob(env, w, "admin-draft", input, "draft");
+    const second = await publishJob(env, w, "admin-draft", input, "draft");
+    assert.equal(creations, 2);
+    assert.deepEqual(first.posts, second.posts);
   } finally {
     globalThis.fetch = original;
   }
