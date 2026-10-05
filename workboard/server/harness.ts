@@ -58,6 +58,25 @@ export async function enqueueApproved(env: Env) {
   }
 }
 export async function advanceHarness(env: Env) {
+  const reconnect = await env.WORKBOARD_DB.prepare(
+    "SELECT job_id,site_id,stage,error FROM agent_workflows WHERE status='failed' AND stage IN ('photo_editor','publisher')",
+  ).all<{ job_id: string; site_id: string; stage: string; error: string }>();
+  for (const task of reconnect.results) {
+    const photoConnected =
+      task.stage === "photo_editor" &&
+      task.error?.includes("PEXELS_API_KEY") &&
+      (env.PEXELS_API_KEY || env.UNSPLASH_ACCESS_KEY);
+    const deliveryConnected =
+      task.stage === "publisher" &&
+      task.error?.includes("사이트 연결 인증") &&
+      (await readiness(await workspace(env, task.site_id), env)).ready;
+    if (photoConnected || deliveryConnected)
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE agent_workflows SET status='pending',error=NULL,updated_at=? WHERE job_id=? AND status='failed'",
+      )
+        .bind(new Date().toISOString(), task.job_id)
+        .run();
+  }
   await enqueueApproved(env);
   // A lost lease needs reconciliation; do not silently repeat paid calls or delivery.
   await env.WORKBOARD_DB.prepare(
