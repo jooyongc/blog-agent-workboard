@@ -231,6 +231,11 @@ export function draftPayload(w: Workspace, input: DraftInput) {
 }
 export async function saveDraft(input: DraftInput, env: Env) {
   const w = validateDraft(input);
+  if (w.integration === "asty")
+    throw new HttpError(
+      409,
+      "ASTY 초안은 기존 파이프라인에서 검토·예약 발행해 주세요.",
+    );
   if (w.integration !== "supabase") {
     return {
       mode: "export",

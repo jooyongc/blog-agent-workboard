@@ -11,7 +11,7 @@
 | Korea Buy List / Blogger | 영어 + 일본어 | 독립 작성한 두 글을 전달 파일로 내보내기 → 기존 aside 격일 루틴에서 이미지·SEO 완성 및 승인 |
 | Korea by Local | 영어 | 해당 사이트 DB에 초안 저장 → 기존 관리자에서 게시 |
 | Korea Decode | 영어 | 해당 사이트 DB에 초안 저장 → 기존 관리자에서 게시 |
-| ASTY Cabin | 영어·일본어·중국어 | 기존 로컬 브릿지 및 GitHub 파이프라인 유지 |
+| ASTY Cabin | 영어·일본어·중국어 | 기존 영어 작성·DeepL 번역·GitHub 파이프라인 유지 |
 
 워크스페이스 목록과 선택 상태는 하나의 정적 카탈로그를 사용합니다. 콘텐츠 검색·상태 필터, 사이트별 작성기, Markdown 미리보기, 브라우저 임시 저장, 아이디어 노트, AI 사용량 리포트, 연결 상태를 제공합니다. Blogger의 비공개 초안·예약 수는 공개 피드로 확인할 수 없어 관리자에서 확인합니다.
 
@@ -37,7 +37,7 @@ npm run pages:dev
 
 ## 배포·운영
 
-[Cloudflare 배포 가이드](docs/CLOUDFLARE-PAGES.md) · [작성 및 브릿지 운영](docs/OPERATIONS.md) · [aside 연결](docs/ASIDE-BRIDGE-HANDOFF.md) · [복구 점검](docs/AUDIT-2026-10-05.md)
+[Cloudflare 배포 가이드](docs/CLOUDFLARE-PAGES.md) · [작성 및 브릿지 운영](docs/OPERATIONS.md) · [aside 연결](docs/ASIDE-BRIDGE-HANDOFF.md) · [복구 점검](docs/AUDIT-2026-10-05.md) · [Workboard 운영 검증](docs/AUDIT-WORKBOARD-2026-10-05.md)
 
 Cloudflare Pages가 `main` 변경을 자동으로 빌드합니다. 저장소 루트에서 `npm ci && npm ci --prefix workboard && npm run build`를 실행하고 `workboard/dist`를 배포합니다. 서버는 Web API와 D1만 사용하므로 실행 시 Node 파일 시스템이나 Next.js 서버가 필요하지 않습니다. 로컬 CLI 브릿지는 별도 Node 도구로 유지됩니다.
 

@@ -12,6 +12,11 @@ type GenerateInput = {
 };
 export async function generate(input: GenerateInput, env: Env) {
   const w = getWorkspace(input.site_id);
+  if (w.integration === "asty")
+    throw new HttpError(
+      409,
+      "ASTY는 기존 파이프라인에서 영어 작성과 DeepL 번역을 진행해 주세요.",
+    );
   if (env.AI_ENABLED !== "true" || !env.ANTHROPIC_API_KEY || !env.WORKBOARD_DB)
     throw new HttpError(
       503,

@@ -163,7 +163,16 @@ export function App() {
       <Shell>
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route path="/compose" element={<Composer key={active.site_id} />} />
+          <Route
+            path="/compose"
+            element={
+              active.integration === "asty" ? (
+                <LegacyComposer />
+              ) : (
+                <Composer key={active.site_id} />
+              )
+            }
+          />
           <Route path="/content" element={<ContentPage />} />
           <Route path="/topics" element={<Topics key={active.site_id} />} />
           <Route path="/workspaces" element={<Workspaces />} />
@@ -1056,8 +1065,8 @@ function Workspaces() {
             <span className="subtle-pill">ASTY Cabin</span>
             <h3>기존 다국어 운영과 연결</h3>
             <p>
-              새 글의 전달 파일을 만들거나 기존 GitHub 파이프라인으로
-              번역·검토·예약 발행을 이어갑니다.
+              기존 GitHub 파이프라인에서 영어 작성과 DeepL 번역을 진행하고
+              검토·예약 발행을 이어갑니다.
             </p>
           </article>
         </div>
@@ -1066,6 +1075,39 @@ function Workspaces() {
     </div>
   );
 }
+function LegacyComposer() {
+  return (
+    <div className="studio-page">
+      <Heading
+        eyebrow="ASTY CONTENT PIPELINE"
+        title="기존 작성 흐름을 이어갑니다."
+        note="ASTY는 영어 원문을 작성한 뒤 DeepL 번역과 용어 검토로 세 언어를 준비합니다."
+      />
+      <Workflow />
+      <section className="studio-panel">
+        <div className="panel-heading">
+          <h2>ASTY 다국어 글 작성</h2>
+        </div>
+        <div className="form-body">
+          <p className="flow-description">
+            기존 파이프라인에서 주제 선정·영어 작성·일본어 및 중국어 번역을
+            진행합니다. 실행 상태를 확인하고 초안의 출처·이미지·번역을 검토한 뒤
+            예약 발행하세요.
+          </p>
+          <div className="flex gap-3 flex-wrap">
+            <Link to="/flow" className="button-primary">
+              작성 파이프라인 열기 <Icon name="Flow" />
+            </Link>
+            <Link to="/content" className="button-secondary">
+              기존 콘텐츠 확인 <Icon name="Doc" />
+            </Link>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 const emptyArticle = (): Article => ({
   title: "",
   meta_description: "",

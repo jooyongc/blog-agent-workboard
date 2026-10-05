@@ -353,3 +353,36 @@ test("repeat draft submission cannot duplicate remote content", async () => {
     globalThis.fetch = old;
   }
 });
+
+test("ASTY web actions preserve the existing English and DeepL pipeline", async () => {
+  const { env, d } = environment();
+  env.ANTHROPIC_API_KEY = "test-key";
+  const generated = await request("content/generate", env, {
+    method: "POST",
+    body: JSON.stringify({ site_id: "asty-cabin" }),
+  });
+  assert.equal(generated.status, 409);
+  const a = {
+    title: "Legacy draft",
+    meta_description: "Internal check",
+    tags: [],
+    content_md:
+      "This private draft checks that the existing ASTY publication flow remains the owner.",
+  };
+  const saved = await request("content/draft", env, {
+    method: "POST",
+    body: JSON.stringify({
+      request_id: "legacy-check",
+      site_id: "asty-cabin",
+      slug: "legacy-check",
+      category: "culture",
+      reviewed: true,
+      translations: { en: a, ja: a, "zh-hans": a },
+    }),
+  });
+  assert.equal(saved.status, 409);
+  assert.equal(
+    d.sqlite.prepare("SELECT COUNT(*) AS total FROM ai_runs").get()?.total,
+    0,
+  );
+});
