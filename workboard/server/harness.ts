@@ -90,6 +90,7 @@ export async function advanceHarness(env: Env) {
     .run();
   const payload = JSON.parse(task.payload_json),
     w = await workspace(env, task.site_id);
+  let repairNext: string | undefined;
   try {
     if (task.stage === "researcher")
       payload.research = await research(
@@ -107,7 +108,7 @@ export async function advanceHarness(env: Env) {
           category: payload.category,
           topic: payload.title,
           research: payload.research.research,
-          seo: payload.research.briefs,
+          seo: { briefs: payload.research.briefs, repair: payload.repair },
           attach_images: false,
         },
         env,
@@ -199,11 +200,22 @@ export async function advanceHarness(env: Env) {
         ]),
       );
       payload.quality = { languages: scores, factual };
-      if (!factual || !Object.values(scores).every((q) => q.passed))
-        throw new HttpError(
-          409,
-          "출처·SEO·AEO·GEO 검증을 통과하지 못했습니다. 결과를 검토하세요.",
-        );
+      if (!factual || !Object.values(scores).every((q) => q.passed)) {
+        if ((payload.repair_attempts ?? 0) < 1) {
+          payload.repair_attempts = (payload.repair_attempts ?? 0) + 1;
+          payload.repair = {
+            factual,
+            issues: Object.values(scores).flatMap((q) => q.issues),
+            instruction:
+              "Rewrite using only directly supported research. Remove unsupported claims. Fix all listed structural issues.",
+          };
+          repairNext = "writer";
+        } else
+          throw new HttpError(
+            409,
+            "출처·SEO·AEO·GEO 검증을 통과하지 못했습니다. 결과를 검토하세요.",
+          );
+      }
     }
     if (task.stage === "publisher") {
       if (!(await readiness(w, env)).ready)
@@ -221,7 +233,7 @@ export async function advanceHarness(env: Env) {
         "draft",
       );
     }
-    const next = stages[stages.indexOf(task.stage) + 1];
+    const next = repairNext || stages[stages.indexOf(task.stage) + 1];
     await env.WORKBOARD_DB.prepare(
       "UPDATE agent_workflows SET stage=?,status=?,payload_json=?,lease_until=NULL,error=NULL,updated_at=? WHERE job_id=?",
     )
