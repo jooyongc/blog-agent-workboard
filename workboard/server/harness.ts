@@ -16,6 +16,25 @@ const stages = [
   "verifier",
   "publisher",
 ];
+/**
+ * A failed verification gets one bounded rewrite, and a second one only when
+ * the first rewrite demonstrably reduced the number of failing claims. Anything
+ * else stops in review so paid calls never loop.
+ */
+export function canRepairAgain(
+  attempts: number,
+  previousFailing: number | undefined,
+  currentFailing: number,
+) {
+  if (attempts < 1) return true;
+  if (attempts === 1)
+    return (
+      typeof previousFailing === "number" &&
+      currentFailing > 0 &&
+      currentFailing < previousFailing
+    );
+  return false;
+}
 export async function enqueueApproved(env: Env) {
   const topics = await env.WORKBOARD_DB.prepare(
     "SELECT t.id,t.site_id,t.title,t.category FROM topic_ideas t WHERE t.status='approved' AND NOT EXISTS(SELECT 1 FROM agent_workflows f WHERE f.topic_id=t.id) ORDER BY t.created_at LIMIT 5",
@@ -242,8 +261,16 @@ export async function advanceHarness(env: Env) {
       };
       const issues = Object.values(scores).flatMap((q) => q.issues);
       if (!report.passed || !Object.values(scores).every((q) => q.passed)) {
-        if ((payload.repair_attempts ?? 0) < 1) {
+        const failing = report.claims.length + issues.length;
+        if (
+          canRepairAgain(
+            payload.repair_attempts ?? 0,
+            payload.repair_failing,
+            failing,
+          )
+        ) {
           payload.repair_attempts = (payload.repair_attempts ?? 0) + 1;
+          payload.repair_failing = failing;
           payload.repair = {
             factual: report.passed,
             reason: report.reason,

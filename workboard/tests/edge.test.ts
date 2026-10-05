@@ -11,7 +11,7 @@ import type { DraftInput } from "../shared/types";
 import { articleUrl, workspace } from "../server/registry";
 import { quality, extractFaq, schema } from "../server/seo";
 import { publishJob } from "../server/publication";
-import { enqueueApproved } from "../server/harness";
+import { enqueueApproved, canRepairAgain } from "../server/harness";
 import { insertStockPhotos } from "../server/media";
 import { creativeAsset, PendingMedia } from "../server/firefly";
 import { verifyGenerated } from "../server/automation";
@@ -1054,4 +1054,13 @@ test("a title cannot be approved twice while its agent run is active", async () 
     }),
   });
   assert.equal(proposed.status, 201);
+});
+
+test("verification repair is bounded: one rewrite, a second only when claims decreased", () => {
+  assert.equal(canRepairAgain(0, undefined, 3), true);
+  assert.equal(canRepairAgain(1, 3, 1), true);
+  assert.equal(canRepairAgain(1, 3, 3), false);
+  assert.equal(canRepairAgain(1, 1, 2), false);
+  assert.equal(canRepairAgain(1, undefined, 1), false);
+  assert.equal(canRepairAgain(2, 3, 1), false);
 });
