@@ -6,3 +6,10 @@ BLOGGER_CLIENT_ID=
 BLOGGER_CLIENT_SECRET=
 CONNECTION_SECRET=
 SCHEDULER_TOKEN=
+
+# Optional server-only stock and Adobe generation secrets
+PEXELS_API_KEY=
+UNSPLASH_ACCESS_KEY=
+FIREFLY_SERVICES_CLIENT_ID=
+FIREFLY_SERVICES_CLIENT_SECRET=
+FIREFLY_SERVICES_SCOPE=openid,AdobeID,session,additional_info,read_organizations,firefly_api,ff_apis
