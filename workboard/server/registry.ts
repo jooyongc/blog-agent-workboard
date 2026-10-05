@@ -196,11 +196,11 @@ export function variable(env: Env, key: string | undefined) {
   return key && typeof env[key] === "string" ? (env[key] as string) : "";
 }
 export function articleUrl(w: Workspace, slug: string) {
-  if (!/^[a-z0-9][a-z0-9-]{0,100}$/.test(slug))
+  if (typeof slug !== "string" || !slug.trim() || slug.length > 200)
     throw new HttpError(400, "글 주소를 확인해 주세요.");
   return (
     w.site_url.replace(/\/$/, "") +
-    (w.article_path ?? "/blog/{slug}").replace("{slug}", slug)
+    (w.article_path ?? "/blog/{slug}").replace("{slug}", encodeURIComponent(slug))
   );
 }
 export async function readiness(w: Workspace, env: Env) {

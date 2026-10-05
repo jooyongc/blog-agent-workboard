@@ -157,6 +157,10 @@ test("custom workspace persists and native article URLs follow each site's route
     articleUrl(await workspace(env, "koreadecode"), "a-guide"),
     "https://koreadecode.com/blog/a-guide",
   );
+  assert.equal(
+    articleUrl(await workspace(env, "koreadecode"), "-legacy-slug-"),
+    "https://koreadecode.com/blog/-legacy-slug-",
+  );
   next.article_path = "https://other.example.com/{slug}";
   assert.equal(
     (
