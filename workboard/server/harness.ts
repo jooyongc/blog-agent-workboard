@@ -253,8 +253,16 @@ export async function advanceHarness(env: Env) {
               status: c.status,
             })),
             issues,
+            research_unsupported: Object.values(
+              payload.research.briefs as Record<
+                string,
+                { unsupported?: unknown[] }
+              >,
+            ).flatMap((b) =>
+              Array.isArray(b?.unsupported) ? b.unsupported : [],
+            ),
             instruction:
-              "Rewrite using only directly supported research. Every listed unsupported or contradicted claim must be deleted or rewritten to state only what the cited evidence says; do not add new facts, numbers or dates. Fix all listed structural issues. Keep at least two distinct exact source URLs as visible links.",
+              "Rewrite using only directly supported research. Every listed unsupported or contradicted claim must be deleted or rewritten to state only what the cited evidence says. Also remove any statement about the research_unsupported topics. Do not add new facts, numbers, prices, dates, brand or shop names. Fix all listed structural issues. Keep at least two distinct exact source URLs as visible links.",
           };
           repairNext = "writer";
         } else

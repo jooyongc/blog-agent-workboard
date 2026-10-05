@@ -1,4 +1,4 @@
-import { useState, useEffect, type FormEvent } from "react";
+import { useState, useEffect, useCallback, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { api } from "./api";
 import type { Workspace } from "../shared/types";
@@ -27,6 +27,12 @@ function Header({ title, note }: { title: string; note: string }) {
 }
 export function WorkspaceManager({ active, workspaces, refresh }: Props) {
   const [editing, setEditing] = useState<Workspace | null>(null);
+  useEffect(() => {
+    if (editing)
+      document
+        .getElementById("workspace-editor")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [editing?.site_id]);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -131,6 +137,7 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
       </div>
       {editing && (
         <form
+          id="workspace-editor"
           key={editing.site_id || "new"}
           className="studio-panel"
           onSubmit={save}
@@ -1094,19 +1101,30 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
     </div>
   );
 }
+function parseVerification(quality: string | null | undefined) {
+  try {
+    const v = quality ? JSON.parse(quality).verification : null;
+    return v && v.passed === false ? v : null;
+  } catch {
+    return null;
+  }
+}
 export function AutomationFlow({ active }: Pick<Props, "active">) {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
   const [check, setCheck] = useState("");
-  useEffect(() => {
-    const load = () =>
+  const load = useCallback(
+    () =>
       api(`automation?site_id=${active.site_id}`)
         .then(setData)
-        .catch((e) => setError(e.message));
+        .catch((e) => setError(e.message)),
+    [active.site_id],
+  );
+  useEffect(() => {
     void load();
     const timer = setInterval(() => void load(), 6000);
     return () => clearInterval(timer);
-  }, [active.site_id]);
+  }, [load]);
   return (
     <div className="studio-page">
       <Header
@@ -1192,81 +1210,79 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
         </div>
         {data?.jobs.length ? (
           <div className="idea-list">
-            {data.jobs.map((j: any) => (
-              <article key={j.id}>
-                <span
-                  className={`status-pill ${j.status === "published" ? "green" : "amber"}`}
-                >
-                  {(
-                    {
-                      ready: "예약 대기",
-                      review: "검토 필요",
-                      published: "발행 완료",
-                      drafted: "초안 저장",
-                      failed: "실패 · 결과 확인",
-                      researching: "리서치 중",
-                      generating: "작성 중",
-                      agent_pending: "미디어 에이전트 작업 중",
-                      verifying: "검증 에이전트 작업 중",
-                      publishing: "임시 발행 중",
-                      needs_reconcile: "중단 · 원격 확인",
-                    } as Record<string, string>
-                  )[j.status] ?? j.status}
-                </span>
-                <h3>{j.title}</h3>
-                <p>
-                  {j.publish_at
-                    ? new Date(j.publish_at).toLocaleString("ko-KR", {
-                        timeZone: "Asia/Seoul",
-                      })
-                    : "작성 중"}
-                </p>
-                <div className="agent-stage-list">
-                  {[
-                    "researcher",
-                    "writer",
-                    "photo_editor",
-                    "verifier",
-                    "publisher",
-                  ].map((agent, index) => {
-                    const step = data?.steps?.find(
-                      (s: any) => s.job_id === j.id && s.agent === agent,
-                    );
-                    const labels = [
-                      "출처 조사",
-                      "독자별 집필",
-                      "무료 사진 2장 이상",
-                      "품질·출처 검증",
-                      "임시 발행",
-                    ];
-                    return (
-                      <span
-                        key={agent}
-                        className={`status-pill ${step?.status === "complete" ? "green" : step?.status === "failed" ? "amber" : "neutral"}`}
-                      >
-                        {labels[index]} ·{" "}
-                        {step?.status === "complete"
-                          ? "완료"
-                          : step?.status === "running"
-                            ? "진행 중"
-                            : step?.status === "failed"
-                              ? "확인 필요"
-                              : "대기"}
-                      </span>
-                    );
-                  })}
-                </div>
-                {j.error && <p role="alert">{j.error}</p>}
-                {(() => {
-                  const v = j.quality_json
-                    ? JSON.parse(j.quality_json).verification
-                    : null;
-                  return v && !v.passed ? (
-                    <div className="verification-report">
-                      <p>{v.reason}</p>
-                      {v.claims?.length ? (
+            {data.jobs.map((j: any) => {
+              const report = parseVerification(j.quality_json);
+              return (
+                <article key={j.id}>
+                  <span
+                    className={`status-pill ${j.status === "published" ? "green" : "amber"}`}
+                  >
+                    {(
+                      {
+                        ready: "예약 대기",
+                        review: "검토 필요",
+                        published: "발행 완료",
+                        drafted: "초안 저장",
+                        failed: "실패 · 결과 확인",
+                        researching: "리서치 중",
+                        generating: "작성 중",
+                        agent_pending: "미디어 에이전트 작업 중",
+                        verifying: "검증 에이전트 작업 중",
+                        publishing: "임시 발행 중",
+                        needs_reconcile: "중단 · 원격 확인",
+                      } as Record<string, string>
+                    )[j.status] ?? j.status}
+                  </span>
+                  <h3>{j.title}</h3>
+                  <p>
+                    {j.publish_at
+                      ? new Date(j.publish_at).toLocaleString("ko-KR", {
+                          timeZone: "Asia/Seoul",
+                        })
+                      : "작성 중"}
+                  </p>
+                  <div className="agent-stage-list">
+                    {[
+                      "researcher",
+                      "writer",
+                      "photo_editor",
+                      "verifier",
+                      "publisher",
+                    ].map((agent, index) => {
+                      const step = data?.steps?.find(
+                        (s: any) => s.job_id === j.id && s.agent === agent,
+                      );
+                      const labels = [
+                        "출처 조사",
+                        "독자별 집필",
+                        "무료 사진 2장 이상",
+                        "품질·출처 검증",
+                        "임시 발행",
+                      ];
+                      return (
+                        <span
+                          key={agent}
+                          className={`status-pill ${step?.status === "complete" ? "green" : step?.status === "failed" ? "amber" : "neutral"}`}
+                        >
+                          {labels[index]} ·{" "}
+                          {step?.status === "complete"
+                            ? "완료"
+                            : step?.status === "running"
+                              ? "진행 중"
+                              : step?.status === "failed"
+                                ? "확인 필요"
+                                : "대기"}
+                        </span>
+                      );
+                    })}
+                  </div>
+                  {j.error && !report && <p role="alert">{j.error}</p>}
+                  {report && (
+                    <div className="verification-report" role="alert">
+                      <p>{report.reason}</p>
+                      {report.claims?.length ? (
                         <ul>
-                          {v.claims
+                          {report.claims
                             .slice(0, 12)
                             .map((c: any, index: number) => (
                               <li key={index}>
@@ -1282,56 +1298,59 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                         </ul>
                       ) : null}
                     </div>
-                  ) : null;
-                })()}
-                {data?.workflows?.some(
-                  (f: any) =>
-                    f.job_id === j.id &&
-                    ["failed", "interrupted"].includes(f.status),
-                ) && (
-                  <button
-                    className="button-secondary"
-                    onClick={() =>
-                      void api("automation/retry", {
-                        method: "POST",
-                        body: JSON.stringify({
-                          site_id: active.site_id,
-                          job_id: j.id,
-                        }),
-                      })
-                        .then(() => setCheck("실패한 단계부터 재개합니다."))
-                        .catch((e) => setError(e.message))
-                    }
-                  >
-                    중단 단계부터 재개
-                  </button>
-                )}
-                {j.status === "drafted" && (
-                  <Link
-                    className="button-secondary"
-                    to={`/compose?job=${j.id}`}
-                  >
-                    완성 글·사진 미리보기
-                  </Link>
-                )}
-                {j.quality_json && (
-                  <details>
-                    <summary>검증 결과</summary>
-                    <pre className="quality-json">
-                      {JSON.stringify(JSON.parse(j.quality_json), null, 2)}
-                    </pre>
-                  </details>
-                )}
-                {["review", "ready"].includes(j.status) && (
-                  <Link
-                    className="button-secondary mt-4"
-                    to={`/compose?job=${j.id}`}
-                  >
-                    글 검토·보완
-                  </Link>
-                )}
-              </article>
-            ))}
+                  )}
+                  {data?.workflows?.some(
+                    (f: any) =>
+                      f.job_id === j.id &&
+                      ["failed", "interrupted"].includes(f.status),
+                  ) && (
+                    <button
+                      className="button-secondary"
+                      onClick={() =>
+                        void api("automation/retry", {
+                          method: "POST",
+                          body: JSON.stringify({
+                            site_id: active.site_id,
+                            job_id: j.id,
+                          }),
+                        })
+                          .then(() => {
+                            setCheck("실패한 단계부터 재개합니다.");
+                            void load();
+                          })
+                          .catch((e) => setError(e.message))
+                      }
+                    >
+                      중단 단계부터 재개
+                    </button>
+                  )}
+                  {j.status === "drafted" && (
+                    <Link
+                      className="button-secondary"
+                      to={`/compose?job=${j.id}`}
+                    >
+                      완성 글·사진 미리보기
+                    </Link>
+                  )}
+                  {j.quality_json && (
+                    <details>
+                      <summary>검증 결과</summary>
+                      <pre className="quality-json">
+                        {JSON.stringify(JSON.parse(j.quality_json), null, 2)}
+                      </pre>
+                    </details>
+                  )}
+                  {["review", "ready"].includes(j.status) && (
+                    <Link
+                      className="button-secondary mt-4"
+                      to={`/compose?job=${j.id}`}
+                    >
+                      글 검토·보완
+                    </Link>
+                  )}
+                </article>
+              );
+            })}
           </div>
         ) : (
           <div className="form-body">
@@ -1371,6 +1390,7 @@ export function Connections({
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
   const [measurement, setMeasurement] = useState<any>(null);
+  const [measuring, setMeasuring] = useState(false);
   useEffect(() => {
     api(`measurement?site_id=${active.site_id}`)
       .then(setMeasurement)
@@ -1450,16 +1470,19 @@ export function Connections({
           <h2>{active.name} · 크롤러 눈으로 검증</h2>
           <button
             className="button-secondary"
-            onClick={() =>
+            disabled={measuring}
+            onClick={() => {
+              setMeasuring(true);
               void api("measurement", {
                 method: "POST",
                 body: JSON.stringify({ site_id: active.site_id }),
               })
                 .then(setMeasurement)
                 .catch((e) => setError(e.message))
-            }
+                .finally(() => setMeasuring(false));
+            }}
           >
-            기준선 측정
+            {measuring ? "원본 HTML 측정 중…" : "기준선 측정"}
           </button>
         </div>
         <div className="form-body">
