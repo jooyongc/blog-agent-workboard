@@ -1,3 +1,9 @@
+# Workboard web application
+
+The production web app is `workboard/` + root `functions/`, deployed on Cloudflare Pages. Use the complete catalog in `workboard/shared/catalog.ts` for listings and active selection; do not depend on runtime `fs` or the old dashboard registry. Verify `npm run build` and `npm run workboard:test` for web/API changes. D1 binding is `WORKBOARD_DB`; secrets never use `VITE_` prefixes. The old `dashboard/` is a legacy rollback reference.
+
+The ASTY article-agent instructions below apply to article production, not to software development. No additional Blogger schedule: preserve aside ownership. User instructions take precedence.
+
 # Scope: recovered multi-site bridge (2026-10-05)
 
 The ASTY voice, language and article facts below apply only to `asty-cabin`. For `korea-buy-list`, `koreabylocal`, and `koreadecode`, use their `sites/<id>/VOICE.md` and `docs/OPERATIONS.md` instead. User instructions take precedence.

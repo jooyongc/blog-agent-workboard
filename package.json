@@ -1,6 +1,6 @@
 {
-  "name": "asty-cabin-blog-agent-lean",
-  "version": "0.2.0",
+  "name": "blog-agent-workboard",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -24,7 +24,14 @@
     "doctor": "tsx scripts/doctor.ts",
     "weekly": "tsx scripts/weekly-auto.mts",
     "compose": "tsx scripts/compose.ts",
-    "bridge-import": "tsx scripts/bridge-import.ts"
+    "bridge-import": "tsx scripts/bridge-import.ts",
+    "build": "npm run build --prefix workboard",
+    "dev": "npm run build && npm run pages:dev",
+    "workboard:test": "npm run test --prefix workboard",
+    "workboard:install": "npm ci --prefix workboard",
+    "pages:deploy": "npm exec --prefix workboard -- wrangler pages deploy workboard/dist --project-name blog-agent-workboard --branch main",
+    "pages:dev": "npm exec --prefix workboard -- wrangler pages dev workboard/dist --port 8790",
+    "dev:web": "npm run dev --prefix workboard"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",

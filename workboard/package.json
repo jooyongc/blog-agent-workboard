@@ -1,0 +1,36 @@
+{
+  "name": "blog-agent-workboard-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview --host 127.0.0.1",
+    "pages:dev": "wrangler pages dev dist --port 8790",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.18.4",
+    "marked": "^15.0.12"
+  },
+  "devDependencies": {
+    "vite": "^8.3.2",
+    "@vitejs/plugin-react": "latest",
+    "@tailwindcss/vite": "^4.0.0",
+    "tailwindcss": "^4.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/node": "^22.0.0",
+    "@cloudflare/workers-types": "latest",
+    "typescript": "^5.9.0",
+    "tsx": "^4.23.15",
+    "wrangler": "^4.147.0"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

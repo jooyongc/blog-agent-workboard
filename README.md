@@ -1,216 +1,46 @@
-# Blog Agent — Multi-site Bridge
+# Blog Agent Workboard
 
-2026-10-05 복구 버전. 운영 대상은 Korea Buy List(Blogger, EN/JA), Korea by Local(EN), Korea Decode(EN)입니다. 기존 ASTY 파이프라인은 별도 유지합니다.
+네 개 블로그의 아이디어·작성·검토·운영 현황을 관리하는 작업실입니다. 웹 앱을 React + Vite + Cloudflare Pages Functions로 다시 구성했습니다.
 
-[운영 가이드](docs/OPERATIONS.md) · [전체 점검 기록](docs/AUDIT-2026-10-05.md) · [aside 연결](docs/ASIDE-BRIDGE-HANDOFF.md)
+- 운영 주소: https://blog-agent-workboard.pages.dev
+- 저장소: https://github.com/jooyongc/blog-agent-workboard
+- 웹 앱: `workboard/` · API 진입점: `functions/api/[[path]].ts` · 운영 기록: Cloudflare D1
 
-Node 22.12+에서 `nvm use`, `npm ci`, `npm run typecheck`, `npm test`로 시작합니다. 실제 생성 및 전송 절차는 운영 가이드를 따릅니다. 새 브릿지는 기본적으로 bundle 생성 또는 원격 초안 저장이며 공개 게시는 기존 관리 화면에서 진행합니다.
+| 워크스페이스 | 언어 | 전달·게시 방식 |
+|---|---|---|
+| Korea Buy List / Blogger | 영어 + 일본어 | 독립 작성한 두 글을 전달 파일로 내보내기 → 기존 aside 격일 루틴에서 이미지·SEO 완성 및 승인 |
+| Korea by Local | 영어 | 해당 사이트 DB에 초안 저장 → 기존 관리자에서 게시 |
+| Korea Decode | 영어 | 해당 사이트 DB에 초안 저장 → 기존 관리자에서 게시 |
+| ASTY Cabin | 영어·일본어·중국어 | 기존 로컬 브릿지 및 GitHub 파이프라인 유지 |
 
-아래는 기존 ASTY 설계 기록입니다. 비용 예상·자동화·예전 quick-start 설명은 현재 운영 가이드를 우선합니다.
+워크스페이스 목록과 선택 상태는 하나의 정적 카탈로그를 사용합니다. 콘텐츠 검색·상태 필터, 사이트별 작성기, Markdown 미리보기, 브라우저 임시 저장, 아이디어 노트, AI 사용량 리포트, 연결 상태를 제공합니다. Blogger의 비공개 초안·예약 수는 공개 피드로 확인할 수 없어 관리자에서 확인합니다.
 
----
+## 개발·검증
 
-# ASTY Cabin Blog Agent — Lean Edition
-
-**Monthly budget: under $10.** Actual expected spend: **$3–$5/month** for 12 posts.
-
-Trilingual (EN / JA / ZH-hans) blog automation for ASTY Cabin using Claude Haiku 4.5.
-
----
-
-## Cost breakdown
-
-| Component | Cost |
-|---|---|
-| Claude API (Haiku 4.5) | ~$0.10–$0.15 per article × 12 = **$1.20–$1.80/mo** |
-| DeepL | Free tier (500k chars/mo, we use ~180k) = **$0** |
-| Unsplash | Free (50 req/hr, we use 3) = **$0** |
-| Supabase | Free tier = **$0** |
-| Cloudflare Workers | Free tier = **$0** |
-| GitHub Actions | Free for public repos = **$0** |
-| Optional `/polish` with Sonnet | $0.20–$0.30 per use. If used 10×/month: **$2.00–$3.00** |
-| **TOTAL** | **$1.20–$5/month** |
-
-Hard guardrails prevent spend above $10 even in worst-case.
-
----
-
-## Architecture (lean)
-
-**2 subagents instead of 5**:
-- `writer` — researches, drafts, self-edits, saves (1 call, Haiku)
-- `packager` — generates multi-lang SEO metadata (1 call, Haiku)
-
-**3 deterministic scripts** (no LLM cost):
-- `translate.ts` — DeepL with glossary
-- `enforce-glossary.ts` — replaces "translator-reviewer" agent via regex rules
-- `fetch-image.ts` — Unsplash search
-- `publish.ts` — POST to site API
-
-**1 weekly batch run** instead of 4× per week separate cron jobs.
-
----
-
-## Flow
-
-```
-Sunday 21:00 KST (GitHub Actions)
-  │
-  ├─ Read topics/manual-queue.md, select 3
-  │
-  ├─ For each topic:
-  │    writer (Haiku, 1 call) → en.md
-  │    translate.ts (DeepL, free) → ja.md, zh.md
-  │    enforce-glossary.ts (local, free) → cleanup + warnings
-  │    packager (Haiku, 1 call) → meta.json
-  │    fetch-image.ts (Unsplash, free) → image URL
-  │
-  └─ Commit drafts to repo
-  
-Monday morning (Human)
-  │
-  ├─ Review drafts/ folder
-  ├─ Optional: /polish <slug> for high-stakes articles (costs $0.30)
-  └─ Run /publish <slug> for each → site
-```
-
----
-
-## Quick start
+Node 22.12 이상이 필요합니다.
 
 ```bash
-# 1. Install
-npm install
-npm install -g @anthropic-ai/claude-code
-
-# 2. Configure
-cp .env.example .env
-# Fill in: ANTHROPIC_API_KEY, DEEPL_API_KEY, UNSPLASH_ACCESS_KEY,
-#         ASTY_SITE_URL, ASTY_AGENT_API_KEY
-
-# 3. One-time glossary setup
-npx tsx scripts/setup-glossaries.ts
-# Paste printed IDs into .env as DEEPL_GLOSSARY_JA_ID / DEEPL_GLOSSARY_ZH_ID
-
-# 4. Test locally
-claude --model claude-haiku-4-5
-> /weekly
-# Wait for 3 drafts to be created
-
-# 5. Review and publish
-> /publish first-slug
-> /publish second-slug
-> /publish third-slug
+npm ci
+npm ci --prefix workboard
+npm run typecheck
+npm test
+npm run workboard:test
+npm run validate-configs
+npm run build
+cp .dev.vars.example .dev.vars
+# 로컬용 비밀 값을 입력합니다. VITE_ 변수에 서버 비밀 키를 넣지 않습니다.
+npx --prefix workboard wrangler d1 migrations apply blog-agent-workboard --local
+npm run pages:dev
 ```
 
----
+전체 앱은 http://localhost:8790 에서 실행합니다. `npm run dev:web`은 UI만 개발하는 Vite 서버입니다.
 
-## Cost guardrails
+## 배포·운영
 
-### 1. Model selection (CLAUDE.md enforced)
-- Default: Haiku 4.5 ($1/$5 per MTok)
-- Sonnet 4.6 only via explicit `/polish` command
-- Never Opus
+[Cloudflare 배포 가이드](docs/CLOUDFLARE-PAGES.md) · [작성 및 브릿지 운영](docs/OPERATIONS.md) · [aside 연결](docs/ASIDE-BRIDGE-HANDOFF.md) · [복구 점검](docs/AUDIT-2026-10-05.md)
 
-### 2. Subagent call limits
-- `writer`: 1 call per article, max 3 web searches
-- `packager`: 1 call per article, no web searches
-- Total per article: 2 LLM calls × ~20K input / ~4K output tokens = ~$0.10
+Cloudflare Pages가 `main` 변경을 자동으로 빌드합니다. 저장소 루트에서 `npm ci && npm ci --prefix workboard && npm run build`를 실행하고 `workboard/dist`를 배포합니다. 서버는 Web API와 D1만 사용하므로 실행 시 Node 파일 시스템이나 Next.js 서버가 필요하지 않습니다. 로컬 CLI 브릿지는 별도 Node 도구로 유지됩니다.
 
-### 3. Deterministic replacements for expensive agents
-- Translation review → `enforce-glossary.ts` (regex, not LLM)
-- Fact-checking → integrated into writer (3 searches max)
-- Curation → inline in `/weekly`, no separate agent
+웹 AI 예산은 글 $0.50 / 주 $2 / 월 $10을 D1 트랜잭션으로 제한합니다. 로컬 CLI와 aside의 지출은 별도 기록이므로 계정 전체 상한은 Anthropic 계정에서 관리해야 합니다. 자체 사이트에는 초안만 저장하며 공개 게시는 기존 관리자·승인 흐름에서 진행합니다.
 
-### 4. Anthropic Console spend limits (recommended)
-Set a hard monthly cap at https://console.anthropic.com/settings/limits
-- Suggested: $15/month hard limit
-- Gives you margin above expected $5 actual spend
-
-### 5. DeepL script caps
-- Per-run: 40,000 chars (enforced in translate.ts)
-- Monthly: 450,000 chars (enforced in translate.ts)
-- Free tier: 500,000 chars/month (DeepL's limit)
-
-### 6. GitHub Actions caps
-- `timeout-minutes: 20`
-- `concurrency: blog-agent-lean` prevents duplicate runs
-- Only 1 scheduled run per week (Sunday)
-
----
-
-## Project structure
-
-```
-.
-├── CLAUDE.md                        # Voice + budget rules (lean)
-├── .claude/
-│   ├── agents/
-│   │   ├── writer.md                # Haiku, integrated research+draft+edit
-│   │   └── packager.md              # Haiku, metadata generation
-│   └── commands/
-│       ├── weekly.md                # Full weekly pipeline (main command)
-│       ├── publish.md               # Manual publish trigger
-│       └── polish.md                # Optional Sonnet upgrade
-├── content/
-│   ├── drafts/<slug>/
-│   └── published/<slug>/
-├── topics/manual-queue.md
-├── glossary/
-│   ├── ja.csv
-│   └── zh.csv
-├── scripts/
-│   ├── setup-glossaries.ts
-│   ├── translate.ts                 # DeepL with cost guards
-│   ├── enforce-glossary.ts          # Replaces translator-reviewer agent
-│   ├── fetch-image.ts               # Unsplash
-│   └── publish.ts                   # Site API
-├── site-files/                      # For ASTY Cabin Next.js repo
-│   ├── drizzle-schema-blog.ts
-│   ├── api-route-multilang.ts
-│   └── APPLY-TO-SITE.md
-└── .github/workflows/
-    └── blog-agent.yml               # Weekly only
-```
-
----
-
-## What I cut to save money
-
-| Removed | Why it's OK |
-|---|---|
-| `editor` subagent | Writer self-edits in-prompt; costs zero extra |
-| `translator-reviewer` subagent | `enforce-glossary.ts` catches 90% via regex |
-| `curator` subagent | Simple queue picking fits inline in `/weekly` |
-| `seo` subagent | Merged into `packager` (was redundant) |
-| Separate cron for curate/publish | Weekly batch + manual publish is simpler and cheaper |
-| Opus usage | Haiku 4.5 is good enough for this voice and length |
-
----
-
-## Troubleshooting
-
-**"Monthly spend approaching $10"** — Check Anthropic Console dashboard. Common cause:
-- Running `/polish` too often (budget $0.30 × N)
-- Running `/weekly` multiple times (each run ≈ $1.50 if full 3 articles)
-- Writer making more than 3 searches per article (should be blocked by CLAUDE.md but verify)
-
-**"Translation quality dropped"** — Check `review_warnings` in ja.md/zh.md frontmatter.
-- If hangul leaking to ja: add entries to glossary/ja.csv
-- If 繁体 in zh: add entries to glossary/zh.csv
-- Re-run `enforce-glossary.ts <slug>`
-
-**"Writer produces thin articles"** — Haiku 4.5 can produce shorter content.
-- Try `/polish <slug>` for the specific article (Sonnet upgrade, $0.30)
-- If consistently too short, switch `model` in `.claude/agents/writer.md` to `claude-sonnet-4-6` (×3 cost but still <$10/mo)
-
----
-
-## When to upgrade to Sonnet
-
-Switch `writer.md` model field to `claude-sonnet-4-6` only if:
-- Haiku quality is consistently unacceptable after 2 weeks of trials
-- You can afford ~$5–$8/month instead of $2
-- High-stakes categories (medical, corporate) dominate your content
-
-Cost: ~$0.30/article × 12 = ~$3.60/month for writer. Still under $10.
+`dashboard/`는 이전 Next.js/Vercel 화면의 복구 참고 자료입니다. 새 Pages 빌드에는 포함하지 않습니다. 기존 설계는 [ASTY 기록](docs/LEGACY-ASTY-README.md)에 보존했습니다. 로컬 폴더 이름은 기존 aside 경로를 유지하기 위해 `asty-blog-agent`를 사용하며 제품·저장소·배포 이름은 `blog-agent-workboard`입니다.
