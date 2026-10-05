@@ -1253,6 +1253,33 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                   })}
                 </div>
                 {j.error && <p role="alert">{j.error}</p>}
+                {(() => {
+                  const v = j.quality_json
+                    ? JSON.parse(j.quality_json).verification
+                    : null;
+                  return v && !v.passed ? (
+                    <div className="verification-report">
+                      <p>{v.reason}</p>
+                      {v.claims?.length ? (
+                        <ul>
+                          {v.claims
+                            .slice(0, 12)
+                            .map((c: any, index: number) => (
+                              <li key={index}>
+                                <strong>
+                                  {String(c.lang).toUpperCase()} ·{" "}
+                                  {c.status === "contradicted"
+                                    ? "모순"
+                                    : "근거 없음"}
+                                </strong>{" "}
+                                {c.claim}
+                              </li>
+                            ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null;
+                })()}
                 {data?.workflows?.some(
                   (f: any) =>
                     f.job_id === j.id &&

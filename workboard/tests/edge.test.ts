@@ -14,6 +14,7 @@ import { publishJob } from "../server/publication";
 import { enqueueApproved } from "../server/harness";
 import { insertStockPhotos } from "../server/media";
 import { creativeAsset, PendingMedia } from "../server/firefly";
+import { verifyGenerated } from "../server/automation";
 function db() {
   const d = new DatabaseSync(":memory:");
   d.exec(
@@ -814,6 +815,107 @@ test("queue consumer persists the successor instead of relying on request lifeti
     assert.equal(acked, 1);
     assert.equal(retried, 0);
     assert.equal(sent[0].options.delaySeconds, 10);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("verifier reports the unsupported claims instead of a bare failure", async () => {
+  const { env } = environment();
+  env.ANTHROPIC_API_KEY = "test-key";
+  const w = await workspace(env, "koreadecode");
+  const evidence = {
+    en: {
+      sources: [
+        {
+          url: "https://english.visitseoul.net/a",
+          claim: "residential",
+          evidence: "It is a residential space.",
+        },
+        {
+          url: "https://english.visitseoul.net/b",
+          claim: "hours",
+          evidence: "Hours of Operation: 10:00 ~ 17:00",
+        },
+      ],
+    },
+  };
+  const draft = (md: string) =>
+    ({
+      request_id: "verify-test",
+      site_id: "koreadecode",
+      slug: "bukchon-verify-test",
+      category: "Travel",
+      reviewed: true,
+      translations: {
+        en: {
+          title: "Bukchon",
+          meta_description: "Bukchon rules",
+          tags: [],
+          content_md: md,
+          images: [],
+        },
+      },
+    }) as DraftInput;
+  const original = globalThis.fetch;
+  let modelCalls = 0;
+  globalThis.fetch = async () => {
+    modelCalls++;
+    return Response.json({
+      stop_reason: "end_turn",
+      usage: { input_tokens: 10, output_tokens: 10 },
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            passed: false,
+            reason: "600 years is not in the evidence",
+            claims: [
+              {
+                lang: "en",
+                claim: "The village dates back 600 years",
+                status: "unsupported",
+              },
+              {
+                lang: "en",
+                claim: "Bukchon is a residential space",
+                status: "verified",
+                source_url: "https://english.visitseoul.net/a",
+              },
+            ],
+          }),
+        },
+      ],
+    });
+  };
+  try {
+    const foreign = await verifyGenerated(
+      env,
+      w,
+      draft(
+        "[a](https://english.visitseoul.net/a) [b](https://english.visitseoul.net/b) [x](https://example.com/x)",
+      ),
+      evidence,
+    );
+    assert.equal(foreign.passed, false);
+    assert.ok(foreign.reason.includes("https://example.com/x"));
+    assert.equal(modelCalls, 0);
+    const report = await verifyGenerated(
+      env,
+      w,
+      draft(
+        "[a](https://english.visitseoul.net/a) [b](https://english.visitseoul.net/b)",
+      ),
+      evidence,
+    );
+    assert.equal(modelCalls, 1);
+    assert.equal(report.passed, false);
+    assert.equal(report.verified, 1);
+    assert.deepEqual(
+      report.claims.map((c) => c.claim),
+      ["The village dates back 600 years"],
+    );
+    assert.ok(report.reason.includes("600 years"));
   } finally {
     globalThis.fetch = original;
   }

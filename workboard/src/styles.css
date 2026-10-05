@@ -2067,6 +2067,19 @@ a {
   padding-left: 18px;
   margin-top: 8px;
 }
+.verification-report {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--amber, #d97706);
+  font-size: 13px;
+}
+.verification-report ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.verification-report li {
+  margin: 2px 0;
+}
 .quality-json {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

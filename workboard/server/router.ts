@@ -553,7 +553,8 @@ export async function onRequest({
         w.languages.map((l) => [l, quality(i.input.translations[l], w, l)]),
       );
       const evidence = researchEvidence(i.input, w);
-      let factual = true;
+      let factual = true,
+        verification: unknown;
       if (evidence) {
         const old = JSON.parse(existing.quality_json ?? "{}");
         const prior = JSON.parse(existing.request_json) as DraftInput;
@@ -561,8 +562,12 @@ export async function onRequest({
           old.factual === true &&
           JSON.stringify(prior.translations) ===
             JSON.stringify(i.input.translations);
-        if (!factual)
-          factual = await verifyGenerated(env, w, i.input, evidence);
+        verification = old.verification;
+        if (!factual) {
+          const report = await verifyGenerated(env, w, i.input, evidence);
+          factual = report.passed;
+          verification = report;
+        }
       }
       const pass =
         i.input.reviewed === true &&
@@ -576,7 +581,15 @@ export async function onRequest({
         .bind(
           JSON.stringify(i.input),
           JSON.stringify(i.input.translations),
-          JSON.stringify(evidence ? { languages: scores, factual } : scores),
+          JSON.stringify(
+            evidence
+              ? {
+                  languages: scores,
+                  factual,
+                  ...(verification ? { verification } : {}),
+                }
+              : scores,
+          ),
           pass ? "ready" : "review",
           i.publish_at,
           new Date().toISOString(),

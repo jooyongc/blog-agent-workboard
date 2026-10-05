@@ -223,7 +223,7 @@ export async function advanceHarness(env: Env) {
       }
     }
     if (task.stage === "verifier") {
-      const factual = await verifyGenerated(
+      const report = await verifyGenerated(
         env,
         w,
         payload.input,
@@ -235,21 +235,38 @@ export async function advanceHarness(env: Env) {
           quality(payload.input.translations[l], w, l),
         ]),
       );
-      payload.quality = { languages: scores, factual };
-      if (!factual || !Object.values(scores).every((q) => q.passed)) {
+      payload.quality = {
+        languages: scores,
+        factual: report.passed,
+        verification: report,
+      };
+      const issues = Object.values(scores).flatMap((q) => q.issues);
+      if (!report.passed || !Object.values(scores).every((q) => q.passed)) {
         if ((payload.repair_attempts ?? 0) < 1) {
           payload.repair_attempts = (payload.repair_attempts ?? 0) + 1;
           payload.repair = {
-            factual,
-            issues: Object.values(scores).flatMap((q) => q.issues),
+            factual: report.passed,
+            reason: report.reason,
+            unsupported_claims: report.claims.map((c) => ({
+              lang: c.lang,
+              claim: c.claim,
+              status: c.status,
+            })),
+            issues,
             instruction:
-              "Rewrite using only directly supported research. Remove unsupported claims. Fix all listed structural issues.",
+              "Rewrite using only directly supported research. Every listed unsupported or contradicted claim must be deleted or rewritten to state only what the cited evidence says; do not add new facts, numbers or dates. Fix all listed structural issues. Keep at least two distinct exact source URLs as visible links.",
           };
           repairNext = "writer";
         } else
           throw new HttpError(
             409,
-            "출처·SEO·AEO·GEO 검증을 통과하지 못했습니다. 결과를 검토하세요.",
+            `출처·SEO·AEO·GEO 검증을 통과하지 못했습니다. ${[
+              report.passed ? "" : report.reason,
+              issues.length ? "구조 문제: " + issues.join(" ") : "",
+            ]
+              .filter(Boolean)
+              .join(" ")
+              .slice(0, 400)} 결과를 검토하세요.`.replace(/\s+/g, " "),
           );
       }
     }
