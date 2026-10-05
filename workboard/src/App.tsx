@@ -79,7 +79,7 @@ function Empty({ title, note }: { title: string; note: string }) {
       </span>
       <h3>{title}</h3>
       <p>{note}</p>
-      <Link to="/compose" className="button-primary">
+      <Link to="/topics" className="button-primary">
         새 글 작성하기
       </Link>
     </div>
@@ -386,7 +386,7 @@ function Shell({ children }: { children: React.ReactNode }) {
             <span className="topbar-language">
               {active.languages.map((l) => l.toUpperCase()).join(" / ")}
             </span>
-            <Link to="/compose" className="button-primary compact">
+            <Link to="/topics" className="button-primary compact">
               <Icon name="Plus" size={15} /> 새 글
             </Link>
           </div>
@@ -660,7 +660,7 @@ function Workflow() {
           <h3>{title}</h3>
           <p>{note}</p>
           {i === 0 && (
-            <Link to="/compose">
+            <Link to="/topics">
               시작하기 <Icon name="Chevron" size={11} />
             </Link>
           )}
@@ -701,7 +701,7 @@ function Home() {
         title="오늘도, 좋은 글 한 편."
         note={`${active.name}의 콘텐츠를 준비하고 운영 현황을 확인하세요.`}
         action={
-          <Link to="/compose" className="button-primary">
+          <Link to="/topics" className="button-primary">
             <Icon name="Plus" size={17} /> 새 글 작성
           </Link>
         }
@@ -996,7 +996,7 @@ function ContentPage() {
         title={`${active.name}의 콘텐츠`}
         note="초안부터 게시된 글까지, 상태별로 확인하세요."
         action={
-          <Link to="/compose" className="button-primary">
+          <Link to="/topics" className="button-primary">
             <Icon name="Plus" /> 새 글 작성
           </Link>
         }

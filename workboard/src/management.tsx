@@ -1024,9 +1024,15 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
               <div className="flex gap-3">
                 <Link
                   className="button-secondary"
-                  to={`/compose?topic=${encodeURIComponent(t.title)}&category=${encodeURIComponent(t.category)}`}
+                  to={
+                    t.status === "proposed"
+                      ? `/compose?topic=${encodeURIComponent(t.title)}&category=${encodeURIComponent(t.category)}`
+                      : "/automation"
+                  }
                 >
-                  직접 작성
+                  {t.status === "proposed"
+                    ? "자료 자동 준비"
+                    : "에이전트 진행 확인"}
                 </Link>
                 {t.status === "proposed" && (
                   <button
