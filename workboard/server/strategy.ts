@@ -58,13 +58,29 @@ export async function propose(
     `You are the restored multi-site Director + SEO Researcher. Produce exactly 3 ranked executable topic proposals for the site's audience and pillars. Prefer actual GSC striking-distance queries (positions 8-20), avoid cannibalizing recent titles, rank 40 points audience fit + 30 SEO opportunity + 20 novelty + 10 confidence. Use site templates, seasonal relevance and named entities. Learn topic preferences from recent_feedback: favour positively rated directions and avoid negatively rated directions without repeating the same title. Emit 2-3 AEO question variants for each. Never invent search volume, position, rankings or evidence. With no measured/search evidence mark source=strategy_only and estimated_difficulty=unknown. ${SEO_RULES} Return JSON {proposals:[{title,category,pillar,primary_keyword,secondary_keywords:[],aeo_question_variants:[],format,score,rationale,source,estimated_difficulty,striking_distance_hit}]}.`,
     {
       direction: input.direction,
-      site: w,
-      strategy: w.strategy,
+      site: {
+        site_id: w.site_id,
+        name: w.name,
+        languages: w.languages,
+        categories: w.categories,
+      },
+      strategy: {
+        ...w.strategy,
+        templates: w.strategy.templates.map(
+          ({ title, category, keyword, format, group }) => ({
+            title,
+            category,
+            keyword,
+            format,
+            group,
+          }),
+        ),
+      },
       recent_titles: recent.posts.slice(0, 30).map((p) => p.title),
       gsc_striking: gsc,
       recent_feedback: feedback.results,
     },
-    2200,
+    4000,
   );
   if (!Array.isArray(r.data.proposals) || r.data.proposals.length !== 3)
     throw new HttpError(502, "주제 제안 형식을 확인하지 못했습니다.");
