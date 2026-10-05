@@ -104,6 +104,24 @@ export async function propose(
     },
   };
 }
+/** Remove web_search citation markup such as <cite index="1-1">…</cite> from researcher output. */
+export function plainEvidence<T>(value: T): T {
+  if (typeof value === "string")
+    return value
+      .replace(/<\/?cite\b[^>]*>/gi, "")
+      .replace(/\(cite index="[^"]*">/gi, "")
+      .replace(/\s{2,}/g, " ")
+      .trim() as T;
+  if (Array.isArray(value)) return value.map(plainEvidence) as T;
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+        k,
+        plainEvidence(v),
+      ]),
+    ) as T;
+  return value;
+}
 export async function research(
   env: Env,
   siteId: string,
@@ -173,8 +191,9 @@ export async function research(
       )
         throw new HttpError(409, "출처 근거를 확인하지 못했습니다.");
     }
-    notes[lang] = JSON.stringify(r.data);
-    briefs[lang] = r.data;
+    const clean = plainEvidence(r.data);
+    notes[lang] = JSON.stringify(clean);
+    briefs[lang] = clean;
   }
   return { research: notes, briefs };
 }

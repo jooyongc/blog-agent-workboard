@@ -105,6 +105,10 @@ export function quality(article: Article, w: Workspace, lang: string): Quality {
   )
     issues.push("비교 주제에는 실제 근거로 작성한 비교표가 필요합니다.");
   if (!signals.freshness) issues.push("Last updated 날짜를 넣으세요.");
+  if (/<\/?cite\b|\(cite index=|\bindex="\d+-\d+/i.test(md))
+    issues.push(
+      "연구 인용 마크업(<cite>)이 본문에 남아 있습니다. 평문으로 바꾸세요.",
+    );
   if (!article.meta_description || article.meta_description.length > 160)
     issues.push("검색 설명을 160자 이내로 준비하세요.");
   if (

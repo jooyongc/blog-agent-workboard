@@ -15,6 +15,7 @@ import { enqueueApproved } from "../server/harness";
 import { insertStockPhotos } from "../server/media";
 import { creativeAsset, PendingMedia } from "../server/firefly";
 import { verifyGenerated } from "../server/automation";
+import { plainEvidence } from "../server/strategy";
 function db() {
   const d = new DatabaseSync(":memory:");
   d.exec(
@@ -919,4 +920,52 @@ test("verifier reports the unsupported claims instead of a bare failure", async 
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test("research citation markup is stripped at the source and blocked in articles", async () => {
+  const cleaned = plainEvidence({
+    brief: "Bukchon is residential.",
+    sources: [
+      {
+        url: "https://english.visitseoul.net/a",
+        claim: "residential",
+        evidence:
+          '<cite index="1-1">It is important to remember that Bukchon is still a residential space.</cite>',
+      },
+    ],
+    unsupported: ['(cite index="2-3">600 years</cite> is not sourced'],
+  });
+  assert.equal(
+    cleaned.sources[0].evidence,
+    "It is important to remember that Bukchon is still a residential space.",
+  );
+  assert.equal(cleaned.unsupported[0], "600 years is not sourced");
+  const { env } = environment();
+  const w = await workspace(env, "koreadecode");
+  const base = {
+    title: "What is Bukchon?",
+    meta_description: "Bukchon explained",
+    tags: [],
+    primary_keyword: "Bukchon",
+    images: [],
+  };
+  const body =
+    "## Quick Answer\n\n" +
+    Array(45).fill("word").join(" ") +
+    "\n\n## What is Bukchon?\n\nBukchon is a neighborhood. [a](https://english.visitseoul.net/a) [b](https://english.visitseoul.net/b)\n\n## Why does it matter?\n\nIt is residential.\n\n## How do visitors behave?\n\nQuietly.\n\nLast updated: 2026-10-05\n\n## FAQ\n\nQ: One?\nA: Yes.\n\nQ: Two?\nA: Yes.\n\nQ: Three?\nA: Yes.\n";
+  const clean = quality({ ...base, content_md: body }, w, "en");
+  const leaked = quality(
+    {
+      ...base,
+      content_md: body.replace(
+        "It is residential.",
+        '<cite index="1-1">It is residential.</cite>',
+      ),
+    },
+    w,
+    "en",
+  );
+  assert.ok(!clean.issues.some((i) => i.includes("<cite>")));
+  assert.ok(leaked.issues.some((i) => i.includes("<cite>")));
+  assert.equal(leaked.passed, false);
 });
