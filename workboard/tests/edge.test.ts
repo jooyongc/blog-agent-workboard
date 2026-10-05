@@ -37,6 +37,12 @@ function db() {
       "utf8",
     ),
   );
+  d.exec(
+    fs.readFileSync(
+      new URL("../migrations/0004_direction_assistant.sql", import.meta.url),
+      "utf8",
+    ),
+  );
   return {
     sqlite: d,
     binding: {
@@ -603,4 +609,29 @@ test("uncertain Blogger second-draft response does not create duplicate posts on
   } finally {
     globalThis.fetch = old;
   }
+});
+
+test("director feedback is persisted separately for each workspace", async () => {
+  const { env, d } = environment();
+  const result = await request("topics/feedback", env, {
+    method: "POST",
+    body: JSON.stringify({
+      site_id: "koreadecode",
+      title: "Culture explained",
+      rating: -1,
+      context: { category: "Culture" },
+    }),
+  });
+  assert.equal(result.status, 201);
+  const rows = d.sqlite
+    .prepare("SELECT site_id,rating FROM topic_feedback")
+    .all();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].site_id, "koreadecode");
+  assert.equal(rows[0].rating, -1);
+  const invalid = await request("topics/feedback", env, {
+    method: "POST",
+    body: JSON.stringify({ site_id: "koreadecode", title: "test", rating: 0 }),
+  });
+  assert.equal(invalid.status, 400);
 });

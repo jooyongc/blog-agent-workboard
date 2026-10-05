@@ -125,7 +125,22 @@ export function validateWorkspace(input: Workspace) {
         typeof t.title !== "string" ||
         t.title.length > 300 ||
         typeof t.keyword !== "string" ||
-        t.keyword.length > 200,
+        t.keyword.length > 200 ||
+        typeof t.format !== "string" ||
+        t.format.length > 50 ||
+        [t.emoji, t.hint, t.group, t.direction].some(
+          (v) => v !== undefined && (typeof v !== "string" || v.length > 3000),
+        ) ||
+        (t.aeo !== undefined && typeof t.aeo !== "boolean") ||
+        (t.tags !== undefined &&
+          (!Array.isArray(t.tags) ||
+            t.tags.length > 10 ||
+            t.tags.some((v) => typeof v !== "string" || v.length > 100))) ||
+        (t.seasonal_months !== undefined &&
+          (!Array.isArray(t.seasonal_months) ||
+            t.seasonal_months.some(
+              (v) => !Number.isInteger(v) || v < 1 || v > 12,
+            ))),
     ) ||
     !Number.isInteger(s.min_score) ||
     s.min_score < 50 ||
@@ -200,7 +215,10 @@ export function articleUrl(w: Workspace, slug: string) {
     throw new HttpError(400, "글 주소를 확인해 주세요.");
   return (
     w.site_url.replace(/\/$/, "") +
-    (w.article_path ?? "/blog/{slug}").replace("{slug}", encodeURIComponent(slug))
+    (w.article_path ?? "/blog/{slug}").replace(
+      "{slug}",
+      encodeURIComponent(slug),
+    )
   );
 }
 export async function readiness(w: Workspace, env: Env) {

@@ -385,12 +385,22 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
             <details>
               <summary>저장된 주제 템플릿 편집</summary>
               <label className="field-label">
-                한 줄에 제목 | 카테고리 | 핵심 키워드 | 형식
+                한 줄에 제목 | 카테고리 | 핵심 키워드 | 형식 | 그룹 | 아이콘 |
+                설명 | 작성 방향
                 <textarea
                   rows={6}
                   defaultValue={editing.strategy.templates
                     .map((t) =>
-                      [t.title, t.category, t.keyword, t.format].join(" | "),
+                      [
+                        t.title,
+                        t.category,
+                        t.keyword,
+                        t.format,
+                        t.group || "",
+                        t.emoji || "",
+                        t.hint || "",
+                        t.direction || "",
+                      ].join(" | "),
                     )
                     .join("\n")}
                   onBlur={(e) =>
@@ -400,15 +410,27 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
                         .split("\n")
                         .filter((s) => s.trim())
                         .map((s, i) => {
-                          const [title, category, keyword, format] = s
-                            .split("|")
-                            .map((s) => s.trim());
+                          const [
+                            title,
+                            category,
+                            keyword,
+                            format,
+                            group,
+                            emoji,
+                            hint,
+                            direction,
+                          ] = s.split("|").map((s) => s.trim());
                           return {
                             ...editing.strategy.templates[i],
                             title,
                             category,
                             keyword,
                             format: format || "guide",
+                            group,
+                            emoji,
+                            hint,
+                            direction,
+                            aeo: group === "AEO 필러",
                           };
                         }),
                     })
