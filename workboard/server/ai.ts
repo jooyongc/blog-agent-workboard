@@ -5,6 +5,7 @@ import { workspace } from "./registry";
 import { validateArticle } from "./content";
 import { modelJson } from "./model";
 import { SEO_RULES, quality } from "./seo";
+import { illustrate } from "./media";
 export type GenerateInput = {
   site_id: string;
   slug: string;
@@ -12,6 +13,7 @@ export type GenerateInput = {
   topic: string;
   research: Record<string, string>;
   seo?: unknown;
+  attach_images?: boolean;
 };
 export async function generate(input: GenerateInput, env: Env) {
   const w = await workspace(env, input.site_id);
@@ -63,10 +65,13 @@ export async function generate(input: GenerateInput, env: Env) {
     if (article.meta_description.length > 160) {
       const prefix = article.meta_description.slice(0, 159);
       const boundary = prefix.lastIndexOf(" ");
-      article.meta_description = prefix.slice(0, boundary >= 120 ? boundary : 159) + "…";
+      article.meta_description =
+        prefix.slice(0, boundary >= 120 ? boundary : 159) + "…";
     }
     let score = quality(article, w, lang);
-    const structural = score.issues.filter((issue) => !issue.includes("alt 설명을 포함한 이미지"));
+    const structural = score.issues.filter(
+      (issue) => !issue.includes("alt 설명을 포함한 이미지"),
+    );
     if (structural.length) {
       try {
         const revised = await modelJson(
@@ -77,11 +82,21 @@ export async function generate(input: GenerateInput, env: Env) {
           4500,
         );
         if (validateArticle(revised.data)) {
-          const candidate: Article = { ...revised.data, source_notes: input.research[lang] };
+          const candidate: Article = {
+            ...revised.data,
+            source_notes: input.research[lang],
+          };
           candidate.meta_description = candidate.meta_description.trim();
-          if (candidate.meta_description.length > 160) candidate.meta_description = candidate.meta_description.slice(0, 160);
+          if (candidate.meta_description.length > 160)
+            candidate.meta_description = candidate.meta_description.slice(
+              0,
+              160,
+            );
           const candidateScore = quality(candidate, w, lang);
-          if (candidateScore.issues.length < score.issues.length || candidateScore.score > score.score) {
+          if (
+            candidateScore.issues.length < score.issues.length ||
+            candidateScore.score > score.score
+          ) {
             article = candidate;
             score = candidateScore;
           }
@@ -94,5 +109,11 @@ export async function generate(input: GenerateInput, env: Env) {
     translations[lang] = article;
     scores[lang] = score;
   }
-  return { translations, quality: scores, cost_usd: cost };
+  const illustrated =
+    input.attach_images === false
+      ? translations
+      : await illustrate(env, w, input.slug, translations);
+  for (const lang of w.languages)
+    scores[lang] = quality(illustrated[lang], w, lang);
+  return { translations: illustrated, quality: scores, cost_usd: cost };
 }

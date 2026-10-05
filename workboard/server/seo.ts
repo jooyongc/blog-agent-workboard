@@ -52,7 +52,17 @@ export function quality(article: Article, w: Workspace, lang: string): Quality {
       /[?？]$/.test(h) ||
       /^(How|What|Which|Where|When|Why|Can|Do|Is|Are)\b/i.test(h),
   ).length;
-  const source = (md.match(/(?<!!)\[[^\]]+\]\(https:\/\//g) ?? []).length;
+  const source = Array.from(
+    md.matchAll(/(?<!!)\[[^\]]+\]\((https:\/\/[^)]+)\)/g),
+  ).filter(
+    (m) =>
+      !article.images?.some(
+        (image) =>
+          image.page === m[1] ||
+          image.photographer_url === m[1] ||
+          image.license_url === m[1],
+      ),
+  ).length;
   const images = (md.match(/!\[[^\]]+\]\(https:\/\//g) ?? []).length;
   const entities = w.strategy.entities.filter((e) =>
     md.toLowerCase().includes(e.toLowerCase()),
@@ -103,9 +113,9 @@ export function quality(article: Article, w: Workspace, lang: string): Quality {
     (quick.split(/\s+/).length < 40 || quick.split(/\s+/).length > 80)
   )
     issues.push("영어 Quick Answer는 40~80단어여야 합니다.");
-  if (w.strategy.required_images > images)
+  if (Math.max(2, w.strategy.required_images) > images)
     issues.push(
-      `alt 설명을 포함한 이미지 ${w.strategy.required_images}장을 확인하세요.`,
+      `alt 설명을 포함한 이미지 ${Math.max(2, w.strategy.required_images)}장을 확인하세요.`,
     );
   if (
     w.strategy.affiliate_disclosure &&

@@ -1089,6 +1089,13 @@ function Composer() {
             setSlug(d.slug);
             setCategory(d.category);
             setArticles(d.translations);
+            setPreviewOn(true);
+            void api<{ html: string }>("content/preview", {
+              method: "POST",
+              body: JSON.stringify({
+                markdown: d.translations[active.languages[0]].content_md,
+              }),
+            }).then((r) => setPreview(r.html));
             setImage(d.featured_image_url ?? "");
             setPublishAt(row.publish_at ?? "");
             setNotice("예약 초안을 불러왔습니다. 보완 후 다시 검토해 주세요.");
@@ -1101,7 +1108,10 @@ function Composer() {
         setTopic(t);
         setSlug(slugify(t));
         const c = query.get("category");
-        if (c && active.categories.includes(c)) setCategory(c);
+        const selectedCategory =
+          c && active.categories.includes(c) ? c : active.categories[0];
+        setCategory(selectedCategory);
+        void collect(t, selectedCategory);
         return;
       }
       const raw = localStorage.getItem(storageKey);
@@ -1145,6 +1155,33 @@ function Composer() {
     setError("");
     setNotice("");
     try {
+      let research = Object.fromEntries(
+        active.languages.map((l) => [l, articles[l].source_notes ?? ""]),
+      );
+      if (active.languages.some((l) => research[l].trim().length < 30)) {
+        setBusy("research");
+        const collected = await api<{ research: Record<string, string> }>(
+          "strategy/research",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              site_id: active.site_id,
+              title: topic,
+              category,
+            }),
+          },
+        );
+        research = collected.research;
+        setArticles((v) =>
+          Object.fromEntries(
+            active.languages.map((l) => [
+              l,
+              { ...v[l], source_notes: research[l] },
+            ]),
+          ),
+        );
+        setBusy("ai");
+      }
       const r = await api<{
         translations: Record<string, Article>;
         cost_usd: number;
@@ -1155,12 +1192,17 @@ function Composer() {
           slug,
           category,
           topic,
-          research: Object.fromEntries(
-            active.languages.map((l) => [l, articles[l].source_notes ?? ""]),
-          ),
+          research,
         }),
       });
       setArticles(r.translations);
+      setImage(r.translations[active.languages[0]].images?.[0]?.url || "");
+      const rendered = await api<{ html: string }>("content/preview", {
+        method: "POST",
+        body: JSON.stringify({ markdown: r.translations[lang].content_md }),
+      });
+      setPreview(rendered.html);
+      setPreviewOn(true);
       setScores(
         (r as unknown as { quality: NonNullable<typeof scores> }).quality,
       );
@@ -1313,7 +1355,7 @@ function Composer() {
       setBusy("");
     }
   }
-  async function collect() {
+  async function collect(selectedTopic = topic, selectedCategory = category) {
     setBusy("research");
     setError("");
     try {
@@ -1323,8 +1365,8 @@ function Composer() {
           method: "POST",
           body: JSON.stringify({
             site_id: active.site_id,
-            title: topic,
-            category,
+            title: selectedTopic,
+            category: selectedCategory,
           }),
         },
       );
@@ -1396,7 +1438,10 @@ function Composer() {
                 <h2>
                   <span className="step-number">01</span> 주제와 독자
                 </h2>
-                <p>작성 방향과 확인한 자료를 먼저 정리하세요.</p>
+                <p>
+                  아이디어 노트의 주제를 가져오면 글 정보와 독자별 출처를
+                  자동으로 준비합니다.
+                </p>
               </div>
             </div>
             <div className="form-body">
@@ -1444,28 +1489,38 @@ function Composer() {
                   <small>영문 소문자·숫자·하이픈을 사용하세요.</small>
                 </label>
               </div>
-              {active.languages.map((l) => (
-                <label className="field-label" key={l}>
-                  {LANGUAGE_LABEL[l] ?? l} 독자를 위한 출처 메모
-                  <textarea
-                    rows={3}
-                    placeholder={
-                      l === "ja"
-                        ? "일본어 독자에 맞춰 확인한 사실과 공식 출처 URL을 적어 주세요."
-                        : "확인한 사실, 확인 날짜, 공식 출처 URL을 적어 주세요."
-                    }
-                    value={articles[l]?.source_notes ?? ""}
-                    onChange={(e) => {
-                      dirty();
-                      setArticles((v) => ({
-                        ...v,
-                        [l]: { ...v[l], source_notes: e.target.value },
-                      }));
-                    }}
-                    maxLength={10000}
-                  />
-                </label>
-              ))}
+              <div className="success-notice" role="status">
+                {busy === "research"
+                  ? "공식 출처를 독자별로 자동 조사하고 있어요…"
+                  : active.languages.every((l) => articles[l]?.source_notes)
+                    ? "독자별 공식 출처가 자동으로 준비되었습니다."
+                    : "주제를 선택하거나 AI 초안 준비를 누르면 공식 출처를 자동 조사합니다."}
+              </div>
+              <details>
+                <summary>자동 조사 자료 확인·수정</summary>
+                {active.languages.map((l) => (
+                  <label className="field-label" key={l}>
+                    {LANGUAGE_LABEL[l] ?? l} 독자를 위한 출처 메모
+                    <textarea
+                      rows={3}
+                      placeholder={
+                        l === "ja"
+                          ? "일본어 독자에 맞춰 확인한 사실과 공식 출처 URL을 적어 주세요."
+                          : "확인한 사실, 확인 날짜, 공식 출처 URL을 적어 주세요."
+                      }
+                      value={articles[l]?.source_notes ?? ""}
+                      onChange={(e) => {
+                        dirty();
+                        setArticles((v) => ({
+                          ...v,
+                          [l]: { ...v[l], source_notes: e.target.value },
+                        }));
+                      }}
+                      maxLength={10000}
+                    />
+                  </label>
+                ))}
+              </details>
               <div className="ai-action-row">
                 <button
                   className="button-secondary"

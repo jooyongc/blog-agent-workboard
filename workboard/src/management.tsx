@@ -690,6 +690,7 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
   const [templateGroup, setTemplateGroup] = useState("전체");
   const [templatesOpen, setTemplatesOpen] = useState(true);
   const [selectedTemplate, setSelectedTemplate] = useState<number | null>(null);
+  const [approvedNotice, setApprovedNotice] = useState("");
   const [votes, setVotes] = useState<Record<number, string>>({});
   const groups = [
     "전체",
@@ -747,6 +748,9 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
         }),
       });
       await load();
+      setApprovedNotice(
+        "아이디어를 승인했습니다. 에이전트가 조사·집필·사진 선정·검증·임시 발행을 자동으로 진행합니다.",
+      );
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -760,6 +764,14 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
         note={`${active.name} · 대상 독자, 기존 글, 키워드 기회와 질문 의도를 함께 살펴봅니다.`}
       />
       {note(error)}
+      {approvedNotice && (
+        <div className="success-notice" role="status">
+          {approvedNotice}{" "}
+          <Link to="/automation" className="button-secondary">
+            에이전트 진행 상황
+          </Link>
+        </div>
+      )}
       <section className="studio-panel direction-assistant">
         <div className="panel-heading">
           <h2>✳ 방향 어시스턴트</h2>
@@ -950,7 +962,7 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
               disabled={busy}
               onClick={() => void approve(t)}
             >
-              이 주제 승인
+              승인하고 자동 작성
             </button>
           </article>
         ))}
@@ -967,10 +979,10 @@ export function StrategyTopics({ active }: Pick<Props, "active">) {
               >
                 {(
                   {
-                    approved: "자동 작성 대기",
+                    approved: "에이전트 작업 대기",
                     used: "작성 완료",
                     proposed: "제안",
-                    in_progress: "작성 중",
+                    in_progress: "에이전트 작업 중",
                   } as Record<string, string>
                 )[t.status] ?? t.status}
               </span>
@@ -1043,23 +1055,28 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
   const [error, setError] = useState("");
   const [check, setCheck] = useState("");
   useEffect(() => {
-    api(`automation?site_id=${active.site_id}`)
-      .then(setData)
-      .catch((e) => setError(e.message));
+    const load = () =>
+      api(`automation?site_id=${active.site_id}`)
+        .then(setData)
+        .catch((e) => setError(e.message));
+    void load();
+    const timer = setInterval(() => void load(), 6000);
+    return () => clearInterval(timer);
   }, [active.site_id]);
   return (
     <div className="studio-page">
       <Header
-        title={`${active.name}의 정기 발행`}
-        note="Cloudflare가 주제·리서치·작성·검증·발행을 이어갑니다."
+        title={`${active.name}의 에이전트 작업실`}
+        note="아이디어만 승인하세요. 역할별 에이전트가 작업을 이어서 임시 발행까지 완료합니다."
       />
       {note(error)}
       <div className="workflow-guide">
         {[
-          "SEO 주제 선정",
-          "독립 리서치·작성",
-          "AEO·GEO 검증",
-          "예약 시점 발행",
+          "공식 출처 조사",
+          "독자별 집필",
+          "무료 사진 선정",
+          "SEO·AEO·GEO 검증",
+          "사이트 임시 발행",
         ].map((s, i) => (
           <div key={s} className="workflow-step">
             <small>STEP 0{i + 1}</small>
@@ -1151,7 +1168,72 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                       })
                     : "작성 중"}
                 </p>
+                <div className="agent-stage-list">
+                  {[
+                    "researcher",
+                    "writer",
+                    "photo_editor",
+                    "verifier",
+                    "publisher",
+                  ].map((agent, index) => {
+                    const step = data?.steps?.find(
+                      (s: any) => s.job_id === j.id && s.agent === agent,
+                    );
+                    const labels = [
+                      "출처 조사",
+                      "독자별 집필",
+                      "무료 사진 2장 이상",
+                      "품질·출처 검증",
+                      "임시 발행",
+                    ];
+                    return (
+                      <span
+                        key={agent}
+                        className={`status-pill ${step?.status === "complete" ? "green" : step?.status === "failed" ? "amber" : "neutral"}`}
+                      >
+                        {labels[index]} ·{" "}
+                        {step?.status === "complete"
+                          ? "완료"
+                          : step?.status === "running"
+                            ? "진행 중"
+                            : step?.status === "failed"
+                              ? "확인 필요"
+                              : "대기"}
+                      </span>
+                    );
+                  })}
+                </div>
                 {j.error && <p role="alert">{j.error}</p>}
+                {data?.workflows?.some(
+                  (f: any) =>
+                    f.job_id === j.id &&
+                    ["failed", "interrupted"].includes(f.status),
+                ) && (
+                  <button
+                    className="button-secondary"
+                    onClick={() =>
+                      void api("automation/retry", {
+                        method: "POST",
+                        body: JSON.stringify({
+                          site_id: active.site_id,
+                          job_id: j.id,
+                        }),
+                      })
+                        .then(() => setCheck("실패한 단계부터 재개합니다."))
+                        .catch((e) => setError(e.message))
+                    }
+                  >
+                    중단 단계부터 재개
+                  </button>
+                )}
+                {j.status === "drafted" && (
+                  <Link
+                    className="button-secondary"
+                    to={`/compose?job=${j.id}`}
+                  >
+                    완성 글·사진 미리보기
+                  </Link>
+                )}
                 {j.quality_json && (
                   <details>
                     <summary>검증 결과</summary>

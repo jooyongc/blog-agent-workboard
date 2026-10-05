@@ -11,6 +11,8 @@ import type { DraftInput } from "../shared/types";
 import { articleUrl, workspace } from "../server/registry";
 import { quality, extractFaq, schema } from "../server/seo";
 import { publishJob } from "../server/publication";
+import { enqueueApproved } from "../server/harness";
+import { insertStockPhotos } from "../server/media";
 function db() {
   const d = new DatabaseSync(":memory:");
   d.exec(
@@ -43,6 +45,13 @@ function db() {
       "utf8",
     ),
   );
+  for (const name of ["0005_stock_images.sql", "0006_agent_harness.sql"])
+    d.exec(
+      fs.readFileSync(
+        new URL("../migrations/" + name, import.meta.url),
+        "utf8",
+      ),
+    );
   return {
     sqlite: d,
     binding: {
@@ -634,4 +643,59 @@ test("director feedback is persisted separately for each workspace", async () =>
     body: JSON.stringify({ site_id: "koreadecode", title: "test", rating: 0 }),
   });
   assert.equal(invalid.status, 400);
+});
+
+test("approval creates one durable agent workflow and no unapproved workflows", async () => {
+  const { env, d } = environment();
+  d.sqlite
+    .prepare(
+      "INSERT INTO topic_ideas(id,site_id,title,category,note,status,brief_json,created_at) VALUES(?,?,?,?,?,?,?,?)",
+    )
+    .run(
+      "approval-id",
+      "koreadecode",
+      "Korean food customs",
+      "K-Food",
+      "",
+      "approved",
+      "{}",
+      new Date().toISOString(),
+    );
+  await Promise.all([enqueueApproved(env), enqueueApproved(env)]);
+  assert.equal(
+    d.sqlite.prepare("SELECT COUNT(*) n FROM agent_workflows").get()?.n,
+    1,
+  );
+  assert.equal(
+    d.sqlite.prepare("SELECT COUNT(*) n FROM content_jobs").get()?.n,
+    1,
+  );
+  assert.equal(
+    d.sqlite.prepare("SELECT stage FROM agent_workflows").get()?.stage,
+    "researcher",
+  );
+});
+test("stock photos retain license evidence and are distributed without repeat insertion", () => {
+  const article = {
+    title: "Korean food",
+    meta_description: "A food guide",
+    tags: [],
+    content_md:
+      "## Quick Answer\nIntro\n## What is it?\nFirst\n## How does it work?\nSecond\n## Why?\nThird",
+  };
+  const photos = [1, 2].map((i) => ({
+    id: String(i),
+    provider: "Pexels" as const,
+    url: `https://images.pexels.com/photos/${i}/photo.jpeg`,
+    page: `https://www.pexels.com/photo/${i}/`,
+    photographer: "Photo author",
+    photographer_url: "https://www.pexels.com/@author/",
+    alt: "Food photograph",
+    license_url: "https://www.pexels.com/license/",
+  }));
+  const result = insertStockPhotos(article, photos);
+  assert.equal(result.images?.length, 2);
+  assert.equal((result.content_md.match(/!\[/g) || []).length, 2);
+  assert.ok(result.content_md.includes("Photo author / Pexels"));
+  assert.equal(insertStockPhotos(result, photos).content_md, result.content_md);
 });

@@ -74,6 +74,16 @@ export type Post = {
 };
 export type PostsResult = { posts: Post[]; warning?: string; error?: string };
 export type Article = {
+  images?: {
+    id: string;
+    provider: "Pexels" | "Unsplash";
+    url: string;
+    page: string;
+    photographer: string;
+    photographer_url: string;
+    alt: string;
+    license_url: string;
+  }[];
   title: string;
   meta_description: string;
   tags: string[];

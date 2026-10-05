@@ -389,7 +389,7 @@
     "admin_url": "https://koreabylocal.com/admin/blog",
     "strategy": {
       "min_score": 70,
-      "required_images": 1,
+      "required_images": 2,
       "affiliate_disclosure": "",
       "source_domains": ["english.visitkorea.or.kr", "english.visitseoul.net"],
       "audience": "Foreign visitors seeking local Korean experiences",
@@ -761,7 +761,7 @@
     "admin_url": "https://koreadecode.com/admin/",
     "strategy": {
       "min_score": 70,
-      "required_images": 1,
+      "required_images": 2,
       "affiliate_disclosure": "",
       "source_domains": ["english.visitkorea.or.kr", "english.visitseoul.net"],
       "audience": "English readers exploring Korean culture and trends",

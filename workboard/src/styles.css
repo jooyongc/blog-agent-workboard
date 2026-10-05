@@ -2173,3 +2173,19 @@ details summary {
     grid-template-columns: 1fr;
   }
 }
+
+.agent-stage-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+.workflow-guide {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.preview-prose img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+  margin: 20px 0;
+}

@@ -1,79 +1,129 @@
 import type { Env } from "./env";
 import type { Workspace, Article } from "../shared/types";
 import { HttpError } from "./http";
+export type StockPhoto = {
+  id: string;
+  provider: "Pexels" | "Unsplash";
+  url: string;
+  page: string;
+  photographer: string;
+  photographer_url: string;
+  alt: string;
+  license_url: string;
+};
+export async function stockPhotos(
+  env: Env,
+  query: string,
+  count = 2,
+): Promise<StockPhoto[]> {
+  const key = typeof env.PEXELS_API_KEY === "string" ? env.PEXELS_API_KEY : "";
+  if (!key)
+    throw new HttpError(
+      503,
+      "무료 사진 검색 연결이 필요합니다. Cloudflare에 PEXELS_API_KEY를 설정하세요.",
+    );
+  let res = await fetch(
+    "https://api.pexels.com/v1/search?" +
+      new URLSearchParams({ query, per_page: "15", orientation: "landscape" }),
+    { headers: { Authorization: key }, signal: AbortSignal.timeout(30000) },
+  );
+  if (!res.ok)
+    throw new HttpError(502, "무료 사진 검색을 완료하지 못했습니다.");
+  let data = (await res.json()) as {
+    photos?: {
+      id: number;
+      url: string;
+      photographer: string;
+      photographer_url: string;
+      alt: string;
+      src: { large: string };
+    }[];
+  };
+  if ((data.photos?.length ?? 0) < count) {
+    const simple = /food|dining|meal|banchan|restaurant/i.test(query)
+      ? "Korean food"
+      : /skin|beauty|cosmetic|makeup/i.test(query)
+        ? "skincare"
+        : /airport|flight/i.test(query)
+          ? "Incheon airport"
+          : /shopping|tax|duty|refund/i.test(query)
+            ? "Seoul shopping"
+            : /busan/i.test(query)
+              ? "Busan"
+              : /korea|seoul/i.test(query)
+                ? "Seoul"
+                : "Korea travel";
+    res = await fetch(
+      "https://api.pexels.com/v1/search?" +
+        new URLSearchParams({
+          query: simple,
+          per_page: "15",
+          orientation: "landscape",
+        }),
+      { headers: { Authorization: key }, signal: AbortSignal.timeout(30000) },
+    );
+    if (!res.ok)
+      throw new HttpError(502, "무료 사진 검색을 완료하지 못했습니다.");
+    data = (await res.json()) as typeof data;
+  }
+  const photos = (data.photos ?? [])
+    .filter(
+      (x) =>
+        x.src?.large?.startsWith("https://images.pexels.com/") &&
+        x.url.startsWith("https://www.pexels.com/"),
+    )
+    .slice(0, count)
+    .map((x) => ({
+      id: String(x.id),
+      provider: "Pexels" as const,
+      url: x.src.large,
+      page: x.url,
+      photographer: x.photographer,
+      photographer_url: x.photographer_url,
+      alt: x.alt || query,
+      license_url: "https://www.pexels.com/license/",
+    }));
+  if (photos.length < count)
+    throw new HttpError(
+      409,
+      "주제에 맞는 무료 사진을 2장 이상 찾지 못했습니다. 검색 방향을 구체화해 주세요.",
+    );
+  return photos;
+}
+export function insertStockPhotos(
+  article: Article,
+  photos: StockPhoto[],
+): Article {
+  const existing = article.images ?? [];
+  if (existing.length >= 2) return article;
+  const clean = (s: string) => s.replace(/[\[\]\n]/g, " ");
+  const blocks = article.content_md.split(/(?=^## )/m);
+  photos.forEach((photo, i) => {
+    const target = Math.min(
+      blocks.length - 1,
+      Math.max(0, Math.floor(((i + 1) * blocks.length) / (photos.length + 1))),
+    );
+    blocks[target] +=
+      `\n\n![${clean(photo.alt)}](${photo.url})\n\n*Photo: [${clean(photo.photographer)} / ${photo.provider}](${photo.page}). Context illustration.*\n\n`;
+  });
+  return { ...article, content_md: blocks.join(""), images: photos };
+}
 export async function illustrate(
   env: Env,
   w: Workspace,
   slug: string,
   articles: Record<string, Article>,
 ) {
-  if (!w.strategy.required_images) return articles;
-  if (!env.AI)
-    throw new HttpError(503, "Cloudflare 이미지 생성 연결이 필요합니다.");
   const result = structuredClone(articles);
-  for (const lang of w.languages) {
-    const images: string[] = [];
-    for (let i = 0; i < Math.min(4, w.strategy.required_images); i++) {
-      const key = `${w.site_id}/${slug}/${lang}/${i}.jpg`;
-      let asset = await env.WORKBOARD_DB.prepare(
-        "SELECT data FROM media_assets WHERE asset_key=?",
-      )
-        .bind(key)
-        .first<{ data: number[] | null }>();
-      if (asset && !asset.data)
-        throw new HttpError(
-          409,
-          "이전 이미지 생성 결과를 확인하세요. 자동으로 재생성하지 않습니다.",
-        );
-      if (!asset) {
-        await env.WORKBOARD_DB.prepare(
-          "INSERT INTO media_assets(asset_key,site_id,month,mime,created_at) VALUES(?,?,?,?,?)",
-        )
-          .bind(
-            key,
-            w.site_id,
-            new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 7),
-            "image/jpeg",
-            new Date().toISOString(),
-          )
-          .run();
-        const style =
-          w.integration === "blogger" && i < 3
-            ? "editorial illustration, soft muted colors, clear shapes"
-            : "photorealistic editorial illustration, natural lighting";
-        const prompt =
-          `${style}. An illustrative concept for this article: ${articles[lang].title}. Focus on ${w.strategy.pillars[i % w.strategy.pillars.length]}. No logos, written text, prices, charts or factual claims. Not documentary evidence. Landscape composition.`.slice(
-            0,
-            2000,
-          );
-        const generated = (await env.AI.run(
-          "@cf/black-forest-labs/flux-1-schnell",
-          { prompt, steps: 4 },
-        )) as { image: string };
-        if (!generated.image)
-          throw new HttpError(502, "이미지 생성이 완료되지 않았습니다.");
-        const bytes = Uint8Array.from(atob(generated.image), (c) =>
-          c.charCodeAt(0),
-        );
-        if (bytes.byteLength > 1500000)
-          throw new HttpError(413, "이미지 크기가 저장 한도를 초과했습니다.");
-        await env.WORKBOARD_DB.prepare(
-          "UPDATE media_assets SET data=? WHERE asset_key=?",
-        )
-          .bind(bytes.buffer, key)
-          .run();
-        asset = { data: Array.from(bytes) };
-      }
-      const url =
-        (env.PUBLIC_WORKBOARD_URL ?? "https://blog-agent-workboard.pages.dev") +
-        "/api/media/" +
-        key;
-      images.push(
-        `![${articles[lang].title.replace(/[\[\]\n]/g, "")} — ${i < 3 && w.integration === "blogger" ? "illustration" : "photorealistic illustration"} ${i + 1}](${url})\n\n*AI-generated illustration, not documentary evidence.*`,
-      );
-    }
-    result[lang].content_md += "\n\n" + images.join("\n\n");
-  }
+  const first = result[w.languages[0]];
+  const query = first.primary_keyword || first.title;
+  const photos = await stockPhotos(
+    env,
+    query,
+    Math.max(2, Math.min(4, w.strategy.required_images)),
+  );
+  for (const lang of w.languages)
+    result[lang] = insertStockPhotos(result[lang], photos);
   return result;
 }
 export async function mediaResponse(env: Env, path: string) {

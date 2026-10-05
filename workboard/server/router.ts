@@ -23,8 +23,13 @@ import {
 } from "./automation";
 import { oauthStart, oauthCallback } from "./oauth";
 import { mediaResponse } from "./media";
+import { advanceHarness, enqueueApproved } from "./harness";
 import { measure } from "./measurement";
-export async function onRequest({ request, env }: Context): Promise<Response> {
+export async function onRequest({
+  request,
+  env,
+  waitUntil,
+}: Context): Promise<Response> {
   try {
     const url = new URL(request.url),
       route = url.pathname.replace(/^\/api\/?/, "").replace(/\/$/, ""),
@@ -41,7 +46,10 @@ export async function onRequest({ request, env }: Context): Promise<Response> {
       return oauthCallback(env, url);
     if (route.startsWith("media/") && method === "GET")
       return mediaResponse(env, route.slice(6));
-    if (route === "internal/scheduler" && method === "POST") {
+    if (
+      ["internal/scheduler", "internal/harness"].includes(route) &&
+      method === "POST"
+    ) {
       const token =
         request.headers.get("Authorization")?.replace(/^Bearer /, "") ?? "";
       if (
@@ -49,6 +57,7 @@ export async function onRequest({ request, env }: Context): Promise<Response> {
         !(await equalSecret(token, env.SCHEDULER_TOKEN))
       )
         throw new HttpError(401, "스케줄러 인증이 필요합니다.");
+      if (route === "internal/harness") return json(await advanceHarness(env));
       const input = await body<{ dry_run?: boolean }>(request);
       return json(await tick(env, Date.now(), input.dry_run === true));
     }
@@ -333,6 +342,10 @@ export async function onRequest({ request, env }: Context): Promise<Response> {
           new Date().toISOString(),
         )
         .run();
+      if (i.status === "approved") {
+        await enqueueApproved(env);
+        wakeHarness(env, waitUntil);
+      }
       return json({ id }, 201);
     }
     if (route === "topics/status" && method === "POST") {
@@ -347,6 +360,10 @@ export async function onRequest({ request, env }: Context): Promise<Response> {
       )
         .bind(i.status, i.id, i.site_id)
         .run();
+      if (i.status === "approved") {
+        await enqueueApproved(env);
+        wakeHarness(env, waitUntil);
+      }
       return json({ ok: true });
     }
     if (route === "automation" && method === "GET") {
@@ -362,7 +379,51 @@ export async function onRequest({ request, env }: Context): Promise<Response> {
         connection: await readiness(w, env),
         jobs: await jobs(env, id),
         runs: r.results,
+        workflows: (
+          await env.WORKBOARD_DB.prepare(
+            "SELECT job_id,topic_id,stage,status,error FROM agent_workflows WHERE site_id=? ORDER BY created_at DESC LIMIT 100",
+          )
+            .bind(id)
+            .all()
+        ).results,
+        steps: (
+          await env.WORKBOARD_DB.prepare(
+            "SELECT s.* FROM agent_steps s JOIN agent_workflows f ON f.job_id=s.job_id WHERE f.site_id=? ORDER BY s.started_at DESC LIMIT 100",
+          )
+            .bind(id)
+            .all()
+        ).results,
       });
+    }
+    if (route === "automation/retry" && method === "POST") {
+      const i = await body<{ site_id: string; job_id: string }>(request);
+      await workspace(env, i.site_id);
+      const f = await env.WORKBOARD_DB.prepare(
+        "SELECT stage,status FROM agent_workflows WHERE job_id=? AND site_id=?",
+      )
+        .bind(i.job_id, i.site_id)
+        .first<{ stage: string; status: string }>();
+      if (!f || !["failed", "interrupted"].includes(f.status))
+        throw new HttpError(409, "재개할 실패 단계가 없습니다.");
+      if (f.stage === "publisher") {
+        const uncertain = await env.WORKBOARD_DB.prepare(
+          "SELECT job_id FROM publication_receipts WHERE job_id=? AND remote_json IS NULL LIMIT 1",
+        )
+          .bind(i.job_id)
+          .first();
+        if (uncertain)
+          throw new HttpError(
+            409,
+            "원격 전송 여부가 불명확합니다. 중복 방지를 위해 결과 확인 후 재개하세요.",
+          );
+      }
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE agent_workflows SET status='pending',error=NULL,updated_at=? WHERE job_id=? AND site_id=?",
+      )
+        .bind(new Date().toISOString(), i.job_id, i.site_id)
+        .run();
+      wakeHarness(env, waitUntil);
+      return json({ accepted: true });
     }
     if (route === "automation/check" && method === "POST")
       return json(await tick(env, Date.now(), true));
@@ -461,4 +522,19 @@ export async function onRequest({ request, env }: Context): Promise<Response> {
   } catch (e) {
     return json({ error: message(e) }, e instanceof HttpError ? e.status : 500);
   }
+}
+
+function wakeHarness(env: Context["env"], waitUntil: Context["waitUntil"]) {
+  if (!env.SCHEDULER_TOKEN || typeof waitUntil !== "function") return;
+  waitUntil(
+    fetch(
+      "https://blog-agent-workboard-scheduler.localmaster.workers.dev/run",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer " + env.SCHEDULER_TOKEN },
+      },
+    ).then((r) => {
+      if (!r.ok) throw Error("Harness dispatch failed");
+    }),
+  );
 }
