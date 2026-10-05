@@ -10,8 +10,6 @@ export type Env = {
   NATIVE_BLOG_SUPABASE_URL?: string;
   NATIVE_BLOG_SUPABASE_KEY?: string;
   ANTHROPIC_API_KEY?: string;
-  GITHUB_TOKEN?: string;
-  GITHUB_REPO?: string;
   AI_ENABLED?: string;
 };
 export type Context = {

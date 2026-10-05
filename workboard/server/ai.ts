@@ -58,8 +58,41 @@ export async function generate(input: GenerateInput, env: Env) {
     if (!validateArticle(r.data))
       throw new HttpError(502, "AI 글 형식을 확인하지 못했습니다.");
     cost += r.cost_usd;
-    translations[lang] = { ...r.data, source_notes: input.research[lang] };
-    scores[lang] = quality(translations[lang], w, lang);
+    let article: Article = { ...r.data, source_notes: input.research[lang] };
+    article.meta_description = article.meta_description.trim();
+    if (article.meta_description.length > 160) {
+      const prefix = article.meta_description.slice(0, 159);
+      const boundary = prefix.lastIndexOf(" ");
+      article.meta_description = prefix.slice(0, boundary >= 120 ? boundary : 159) + "…";
+    }
+    let score = quality(article, w, lang);
+    const structural = score.issues.filter((issue) => !issue.includes("alt 설명을 포함한 이미지"));
+    if (structural.length) {
+      try {
+        const revised = await modelJson(
+          env,
+          `${w.site_id}/${input.slug}`,
+          `${SEO_RULES}\nRevise only the listed structural SEO/AEO/GEO issues. Keep all claims within the independently supplied evidence. Use at least two distinct exact source URLs as visible Markdown links; do not invent or alter URL paths. Keep 3-5 FAQ pairs in the required visible Q/A format. Preserve language ${lang} and return the full article JSON with title, meta_description, tags, content_md, primary_keyword, secondary_keywords and format.`,
+          { article, issues: structural, research: input.research[lang] },
+          4500,
+        );
+        if (validateArticle(revised.data)) {
+          const candidate: Article = { ...revised.data, source_notes: input.research[lang] };
+          candidate.meta_description = candidate.meta_description.trim();
+          if (candidate.meta_description.length > 160) candidate.meta_description = candidate.meta_description.slice(0, 160);
+          const candidateScore = quality(candidate, w, lang);
+          if (candidateScore.issues.length < score.issues.length || candidateScore.score > score.score) {
+            article = candidate;
+            score = candidateScore;
+          }
+          cost += revised.cost_usd;
+        }
+      } catch {
+        // Keep the initial draft for human review when a bounded repair fails.
+      }
+    }
+    translations[lang] = article;
+    scores[lang] = score;
   }
   return { translations, quality: scores, cost_usd: cost };
 }
