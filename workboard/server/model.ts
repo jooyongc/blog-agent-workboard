@@ -6,8 +6,21 @@ export const MODEL_RATES = {
   "claude-haiku-4-5": { input: 1, output: 5 },
   "claude-sonnet-5-5": { input: 2, output: 10 },
 } as const;
+export class ProviderWait extends HttpError {
+  constructor(
+    public code: number,
+    public retrySeconds: number,
+  ) {
+    super(
+      503,
+      `AI 제공자가 일시적으로 요청을 제한했습니다 (HTTP ${code}). 잠시 후 자동 재개합니다.`,
+    );
+  }
+}
 export class IncompleteResponse extends HttpError {
-  constructor(public reason:string) { super(502,"AI 답변이 완결되지 않았습니다. 출력 복구가 필요합니다."); }
+  constructor(public reason: string) {
+    super(502, "AI 답변이 완결되지 않았습니다. 출력 복구가 필요합니다.");
+  }
 }
 export class BudgetWait extends HttpError {
   constructor(
@@ -128,9 +141,27 @@ export async function modelJson(
     });
     if (!res.ok) {
       settled = true;
+      if ([429, 500, 502, 503, 529].includes(res.status))
+        throw new ProviderWait(
+          res.status,
+          Math.max(
+            30,
+            Math.min(300, Number(res.headers.get("Retry-After")) || 60),
+          ),
+        );
+      const detail = (await res.json().catch(() => null)) as {
+        error?: { message?: string };
+      } | null;
+      const hint =
+        typeof detail?.error?.message === "string"
+          ? detail.error.message
+              .replaceAll(env.ANTHROPIC_API_KEY, "[credential]")
+              .replace(/sk-[a-zA-Z0-9_-]+/g, "[credential]")
+              .slice(0, 240)
+          : "연결·모델 설정을 확인하세요.";
       throw new HttpError(
         502,
-        "AI 요청을 처리하지 못했습니다. 자동 재시도하지 않았습니다.",
+        "AI 요청이 거절되었습니다 (HTTP " + res.status + "): " + hint,
       );
     }
     const d = (await res.json()) as {

@@ -554,22 +554,16 @@ test("native publication creates a draft, then publishes at its real canonical p
   env.NATIVE_BLOG_SUPABASE_KEY = "mock-secret";
   const old = globalThis.fetch;
   const calls: { method: string; url: string; body: string }[] = [];
+  let row:any=null;
   globalThis.fetch = async (url, init) => {
     calls.push({
       method: init?.method ?? "GET",
       url: String(url),
       body: String(init?.body ?? ""),
     });
-    if (init?.method === "POST")
-      return Response.json(
-        [{ id: 42, slug: "test-article", status: "draft" }],
-        { status: 201 },
-      );
-    if (init?.method === "PATCH")
-      return Response.json([
-        { id: 42, slug: "test-article", status: "published" },
-      ]);
-    return Response.json([]);
+    if(init?.method==="POST") {row={...JSON.parse(String(init.body)),id:42,updated_at:"2026-10-06T00:00:00Z"};return Response.json([row],{status:201});}
+    if(init?.method==="PATCH") {row={...row,...JSON.parse(String(init.body))};return Response.json([row]);}
+    return Response.json(row?[row]:[]);
   };
   try {
     const result = await publishJob(
@@ -584,7 +578,7 @@ test("native publication creates a draft, then publishes at its real canonical p
     const patch = calls.find((c) => c.method === "PATCH");
     assert.ok(patch);
     assert.match(
-      patch.body,
+      calls.find(c=>c.method==="POST")!.body,
       /https:\/\/koreabylocal\.com\/guidebook\/test-article/,
     );
     assert.equal(JSON.parse(patch.body).status, "published");
@@ -1519,5 +1513,53 @@ test("a confirmed truncated senior response gets only one automatic recovery", a
     await advanceHarness(env);
     assert.equal(calls,2);
     assert.equal((d.sqlite.prepare("SELECT COUNT(*) AS n FROM ai_runs WHERE actual>0").get() as any).n,2);
+  } finally {globalThis.fetch=original;}
+});
+
+test("provider rate limits defer the checkpoint and release unspent reservations", async () => {
+  const {env,d}=environment();env.ANTHROPIC_API_KEY="test";
+  const {w,input,research,decision}=supervisorFixture();
+  const payload={slug:input.slug,input,research,supervision:[{...decision,action:"edit",run_id:"assignment",model:SUPERVISOR_MODEL}]};
+  d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('rate-limited',?,?,?,'Travel','{}','editing','now','now')").run(w.site_id,input.slug,input.translations.en.title);
+  d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES('rate-limited','topic',?,'editor','pending',?,'now','now')").run(w.site_id,JSON.stringify(payload));
+  const original=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>++calls===1 ? Response.json({error:{type:"rate_limit_error"}},{status:429,headers:{"Retry-After":"60"}}) : Response.json({stop_reason:"end_turn",usage:{input_tokens:100,output_tokens:100},content:[{type:"text",text:JSON.stringify(input.translations.en)}]});
+  try {
+    const result=await advanceHarness(env);assert.ok("waiting" in result && result.waiting);
+    let state=d.sqlite.prepare("SELECT status,payload_json FROM agent_workflows").get() as any;
+    assert.equal(state.status,"retry_wait");
+    assert.equal((d.sqlite.prepare("SELECT actual,reserved FROM ai_runs").get() as any).reserved,0);
+    await advanceHarness(env);assert.equal(calls,1);
+    await recoverWorkflows(env,Date.parse(JSON.parse(state.payload_json).provider_retry_at)+1);
+    await advanceHarness(env);
+    state=d.sqlite.prepare("SELECT status,stage,payload_json FROM agent_workflows").get() as any;
+    assert.equal(state.stage,"photo_editor");assert.equal(calls,2);
+    assert.deepEqual(JSON.parse(state.payload_json).editor_completed.assignment,["en"]);
+  } finally {globalThis.fetch=original;}
+});
+
+test("an existing public original becomes a private correction draft without duplicate creation on replay", async () => {
+  const {env,d}=environment();env.NATIVE_BLOG_SUPABASE_KEY="test";
+  const {w,input}=supervisorFixture(),job="revision-job";
+  const originalRow={id:99,slug:input.slug,status:"published",content:"Original published body"};
+  const rows=new Map<string,any>([[input.slug,{...originalRow}]]);
+  d.sqlite.prepare("INSERT INTO publication_receipts(job_id,lang,phase,updated_at) VALUES(?,'en','create','now')").run(job);
+  const original=globalThis.fetch;let creates=0,patches=0;
+  globalThis.fetch=async(url,init)=>{
+    if(init?.method==="POST") {creates++;const body=JSON.parse(String(init.body));const row={...body,id:100};rows.set(body.slug,row);return Response.json([row],{status:201});}
+    if(init?.method==="PATCH") {patches++;throw Error("Original must never be patched");}
+    const slug=new URL(String(url)).searchParams.get("slug")!.slice(3);
+    const row=rows.get(slug);return Response.json(row?[row]:[]);
+  };
+  try {
+    const first=await publishJob(env,w,job,input,"draft") as any;
+    const second=await publishJob(env,w,job,input,"draft") as any;
+    assert.equal(first.posts.en.id,100);assert.equal(first.posts.en.status,"draft");
+    assert.equal(first.posts.en.revision_of.id,99);
+    assert.equal(first.posts.en.slug,second.posts.en.slug);
+    assert.ok(first.posts.en.slug.includes("-review-"));
+    assert.equal(creates,1);assert.equal(patches,0);
+    assert.deepEqual(rows.get(input.slug),originalRow);
+    assert.equal((d.sqlite.prepare("SELECT COUNT(*) AS n FROM publication_receipts WHERE remote_json IS NULL").get() as any).n,0);
   } finally {globalThis.fetch=original;}
 });

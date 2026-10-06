@@ -1263,6 +1263,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                         ready: "예약 대기",
                         review: "검토 필요",
                         budget_wait: "예산 갱신 후 자동 재개",
+                        retry_wait: "AI 요청 제한 · 자동 재개 대기",
                         published: "발행 완료",
                         drafted: "초안 저장",
                         failed: "실패 · 결과 확인",
@@ -1297,9 +1298,12 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                       );
                       const current =
                         workflow?.stage === agent &&
-                        ["pending", "running", "budget_wait"].includes(
-                          workflow?.status,
-                        );
+                        [
+                          "pending",
+                          "running",
+                          "budget_wait",
+                          "retry_wait",
+                        ].includes(workflow?.status);
                       const status = current
                         ? workflow.status === "budget_wait"
                           ? "예산 대기"

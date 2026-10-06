@@ -171,11 +171,37 @@ export function validateSupervision(
     claims,
   };
 }
-function compactArticle(article:Article) {
-  return {title:article.title,meta_description:article.meta_description,content_md:article.content_md.replace(/!\[[^\]]*\]\(https:\/\/[^)]+\)/g,"[Licensed contextual image]").split("\n").filter(line=>!line.trim().startsWith("*Photo:")).join("\n")};
+function compactArticle(article: Article) {
+  return {
+    title: article.title,
+    meta_description: article.meta_description,
+    content_md: article.content_md
+      .replace(/!\[[^\]]*\]\(https:\/\/[^)]+\)/g, "[Licensed contextual image]")
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("*Photo:"))
+      .join("\n"),
+  };
 }
-function compactEvidence(evidence:Evidence) {
-  return Object.fromEntries(Object.entries(evidence).map(([lang,brief])=>[lang,{sources:[...new Map(brief.sources.map(source=>[source.url+source.evidence,{url:source.url,claim:source.claim,evidence:source.evidence}])).values()]}]));
+function compactEvidence(evidence: Evidence) {
+  return Object.fromEntries(
+    Object.entries(evidence).map(([lang, brief]) => [
+      lang,
+      {
+        sources: [
+          ...new Map(
+            brief.sources.map((source) => [
+              source.url + source.evidence,
+              {
+                url: source.url,
+                claim: source.claim,
+                evidence: source.evidence,
+              },
+            ]),
+          ).values(),
+        ],
+      },
+    ]),
+  );
 }
 export async function supervise(
   env: Env,
@@ -198,16 +224,28 @@ export async function supervise(
         languages: w.languages,
         audience: w.strategy.audience,
       },
-      translations: Object.fromEntries(w.languages.map(lang=>[lang,compactArticle(payload.input.translations[lang])])),
+      translations: Object.fromEntries(
+        w.languages.map((lang) => [
+          lang,
+          compactArticle(payload.input.translations[lang]),
+        ]),
+      ),
       research_evidence: compactEvidence(payload.research.briefs),
       previous_verification: payload.quality?.verification,
       structure: Object.fromEntries(
         w.languages.map((l) => [
           l,
-          {score:quality(payload.input.translations[l], w, l).score,issues:quality(payload.input.translations[l],w,l).issues},
+          {
+            score: quality(payload.input.translations[l], w, l).score,
+            issues: quality(payload.input.translations[l], w, l).issues,
+          },
         ]),
       ),
-      history: (payload.supervision || []).map((d:Supervision)=>({action:d.action,reason:d.reason,instructions:d.instructions})),
+      history: (payload.supervision || []).map((d: Supervision) => ({
+        action: d.action,
+        reason: d.reason,
+        instructions: d.instructions,
+      })),
       round,
     },
     12000,
@@ -233,7 +271,10 @@ export async function editUnderSupervision(
   payload: any,
 ) {
   const decision: Supervision = payload.supervision.at(-1);
+  payload.editor_completed ||= {};
+  payload.editor_completed[decision.run_id] ||= [];
   for (const lang of decision.target_languages) {
+    if (payload.editor_completed[decision.run_id].includes(lang)) continue;
     const original: Article = payload.input.translations[lang];
     const result = await modelJson(
       env,
@@ -242,8 +283,15 @@ export async function editUnderSupervision(
       {
         language: lang,
         article: compactArticle(original),
-        supervisor: {...decision,claims:decision.claims.filter(c=>c.lang===lang && c.status!=="verified")},
-        research: compactEvidence({[lang]:payload.research.briefs[lang]})[lang],
+        supervisor: {
+          ...decision,
+          claims: decision.claims.filter(
+            (c) => c.lang === lang && c.status !== "verified",
+          ),
+        },
+        research: compactEvidence({ [lang]: payload.research.briefs[lang] })[
+          lang
+        ],
         today: new Date().toISOString().slice(0, 10),
       },
       7000,
@@ -265,6 +313,7 @@ export async function editUnderSupervision(
       payload.research.briefs[lang],
       lang,
     );
+    payload.editor_completed[decision.run_id].push(lang);
   }
   delete payload.supervisor_approval;
 }

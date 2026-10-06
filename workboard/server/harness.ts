@@ -9,7 +9,7 @@ import { quality } from "./seo";
 import { validateDraft } from "./content";
 import { publishJob } from "./publication";
 import { HttpError } from "./http";
-import { BudgetWait, IncompleteResponse } from "./model";
+import { BudgetWait, IncompleteResponse, ProviderWait } from "./model";
 import { budgetSettings } from "./budget";
 import {
   supervise,
@@ -91,7 +91,7 @@ export function planRepair(payload: any, w: { languages: string[] }) {
 }
 export async function recoverWorkflows(env: Env, now = Date.now()) {
   const tasks = await env.WORKBOARD_DB.prepare(
-    "SELECT job_id,site_id,stage,status,error,payload_json FROM agent_workflows WHERE status IN ('failed','budget_wait') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted')) ORDER BY updated_at LIMIT 100",
+    "SELECT job_id,site_id,stage,status,error,payload_json FROM agent_workflows WHERE status IN ('failed','budget_wait','retry_wait') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted')) ORDER BY updated_at LIMIT 100",
   ).all<{
     job_id: string;
     site_id: string;
@@ -137,10 +137,39 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
       task.error?.includes("실제 언어 오류")
     )
       resume = true;
-    if (task.status === "failed" && ["supervisor","editor"].includes(stage) && task.error?.includes("AI 답변이 완결") && !(payload.response_retries >= 1)) {
-      payload.response_retries = (payload.response_retries || 0)+1;
+    if (
+      task.status === "failed" &&
+      ["supervisor", "editor"].includes(stage) &&
+      task.error?.includes("AI 답변이 완결") &&
+      !(payload.response_retries >= 1)
+    ) {
+      payload.response_retries = (payload.response_retries || 0) + 1;
       resume = true;
     }
+    if (task.status === "retry_wait")
+      resume = Date.parse(payload.provider_retry_at) <= now;
+    if (
+      task.status === "failed" &&
+      ["supervisor", "editor"].includes(stage) &&
+      task.error?.includes("AI 요청을 처리하지") &&
+      !payload.legacy_provider_retry
+    ) {
+      const run = await env.WORKBOARD_DB.prepare(
+        "SELECT actual,status FROM ai_runs WHERE article_key=? ORDER BY created_at DESC LIMIT 1",
+      )
+        .bind(`${task.site_id}/${payload.slug}`)
+        .first<{ actual: number | null; status: string }>();
+      if (run?.status === "failed" && run.actual === 0) {
+        payload.legacy_provider_retry = true;
+        resume = true;
+      }
+    }
+    if (
+      task.status === "failed" &&
+      stage === "publisher" &&
+      task.error?.includes("원격에 같은 slug")
+    )
+      resume = true;
     if (!resume) continue;
     delete payload.recovery;
     const changed = await env.WORKBOARD_DB.prepare(
@@ -285,7 +314,9 @@ export async function advanceHarness(env: Env) {
         payload.title,
         payload.category,
         payload.slug,
-        payload.supervision?.at(-1)?.action === "research" ? payload.supervision.at(-1).instructions : undefined,
+        payload.supervision?.at(-1)?.action === "research"
+          ? payload.supervision.at(-1).instructions
+          : undefined,
       );
     if (task.stage === "writer") {
       const result = await generate(
@@ -552,12 +583,79 @@ export async function advanceHarness(env: Env) {
       next: next || null,
     };
   } catch (e) {
-    if (e instanceof IncompleteResponse && ["supervisor","editor"].includes(task.stage) && !(payload.response_retries >= 1)) {
-      payload.response_retries = (payload.response_retries || 0)+1;
-      await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET status='pending',payload_json=?,error=NULL,lease_until=NULL,updated_at=? WHERE job_id=?").bind(JSON.stringify(payload),new Date().toISOString(),task.job_id).run();
-      await env.WORKBOARD_DB.prepare("UPDATE agent_steps SET status='waiting',error='출력 길이 제한: 한 번 자동 복구합니다.',finished_at=? WHERE id=?").bind(new Date().toISOString(),step).run();
-      if (payload.input) await saveProgress(env,task.job_id,payload,task.stage==="supervisor"?"supervising":"editing");
-      return {worked:true,job_id:task.job_id,agent:task.stage,recovering:true};
+    if (e instanceof ProviderWait) {
+      const retryKey =
+        task.stage +
+        "/" +
+        (payload.supervision?.at(-1)?.run_id || payload.supervisor_rounds || 0);
+      payload.provider_retries ||= {};
+      const count = payload.provider_retries[retryKey] || 0;
+      if (count < 3) {
+        const delay = Math.min(900, e.retrySeconds * Math.pow(2, count));
+        payload.provider_retries[retryKey] = count + 1;
+        payload.provider_retry_at = new Date(
+          Date.now() + delay * 1000,
+        ).toISOString();
+        await env.WORKBOARD_DB.prepare(
+          "UPDATE agent_workflows SET status='retry_wait',payload_json=?,error=?,lease_until=NULL,updated_at=? WHERE job_id=?",
+        )
+          .bind(
+            JSON.stringify(payload),
+            e.message,
+            new Date().toISOString(),
+            task.job_id,
+          )
+          .run();
+        await env.WORKBOARD_DB.prepare(
+          "UPDATE agent_steps SET status='waiting',error=?,finished_at=? WHERE id=?",
+        )
+          .bind(e.message, new Date().toISOString(), step)
+          .run();
+        if (payload.input)
+          await saveProgress(env, task.job_id, payload, "retry_wait");
+        await env.WORKBOARD_DB.prepare(
+          "UPDATE content_jobs SET status='retry_wait',error=?,updated_at=? WHERE id=?",
+        )
+          .bind(e.message, new Date().toISOString(), task.job_id)
+          .run();
+        return {
+          worked: true,
+          waiting: true,
+          delay_seconds: delay,
+          job_id: task.job_id,
+          agent: task.stage,
+        };
+      }
+    }
+    if (
+      e instanceof IncompleteResponse &&
+      ["supervisor", "editor"].includes(task.stage) &&
+      !(payload.response_retries >= 1)
+    ) {
+      payload.response_retries = (payload.response_retries || 0) + 1;
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE agent_workflows SET status='pending',payload_json=?,error=NULL,lease_until=NULL,updated_at=? WHERE job_id=?",
+      )
+        .bind(JSON.stringify(payload), new Date().toISOString(), task.job_id)
+        .run();
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE agent_steps SET status='waiting',error='출력 길이 제한: 한 번 자동 복구합니다.',finished_at=? WHERE id=?",
+      )
+        .bind(new Date().toISOString(), step)
+        .run();
+      if (payload.input)
+        await saveProgress(
+          env,
+          task.job_id,
+          payload,
+          task.stage === "supervisor" ? "supervising" : "editing",
+        );
+      return {
+        worked: true,
+        job_id: task.job_id,
+        agent: task.stage,
+        recovering: true,
+      };
     }
     if (e instanceof PendingMedia) {
       await env.WORKBOARD_DB.prepare(

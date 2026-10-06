@@ -18,7 +18,11 @@ async function invoke(env: SchedulerEnv, path: string) {
   );
   if (!response.ok)
     throw Error("Workboard " + path + " HTTP " + response.status);
-  return response.json() as Promise<{ worked?: boolean; waiting?: boolean }>;
+  return response.json() as Promise<{
+    worked?: boolean;
+    waiting?: boolean;
+    delay_seconds?: number;
+  }>;
 }
 export default {
   scheduled(
@@ -40,7 +44,11 @@ export default {
         if (result.worked)
           await env.AGENT_QUEUE.send(
             { type: "harness" },
-            { delaySeconds: result.waiting ? 10 : 0 },
+            {
+              delaySeconds: result.waiting
+                ? Math.max(1, Math.min(900, result.delay_seconds || 10))
+                : 0,
+            },
           );
         message.ack();
       } catch {
@@ -65,7 +73,15 @@ export default {
       service: "blog-agent-workboard-scheduler",
       status: "ok",
       transport: "Cloudflare Queues",
-      agents: ["researcher", "writer", "photo_editor", "verifier", "supervisor", "editor", "publisher"],
+      agents: [
+        "researcher",
+        "writer",
+        "photo_editor",
+        "verifier",
+        "supervisor",
+        "editor",
+        "publisher",
+      ],
     });
   },
 };
