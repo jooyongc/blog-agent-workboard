@@ -71,12 +71,13 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
     if (!editing) return;
     setBusy(true);
     setError("");
+    setMessage("");
     try {
-      await api("workspaces", {
+      const saved = await api<Workspace>("workspaces", {
         method: creating ? "POST" : "PUT",
         body: JSON.stringify(editing),
       });
-      setMessage("워크스페이스와 전략·발행 설정을 저장했습니다.");
+      setMessage(`${saved.name} 설정을 저장했습니다. ${saved.schedule.enabled ? `자동 발행 켜짐 · ${saved.schedule.interval_days}일마다 · ${saved.schedule.mode === "draft" ? "비공개 초안 저장" : "공개 발행"}` : "자동 발행 꺼짐"}`);
       setEditing(null);
       await refresh();
     } catch (e) {
@@ -645,7 +646,7 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
                   })
                 }
               />
-              저장 전략에서 주제 선정·리서치·작성·검증 자동 실행
+              승인한 아이디어의 리서치·작성·검증 자동 실행
             </label>
             <div className="form-row">
               <label className="field-label">
@@ -718,6 +719,7 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
               출처·FAQ·이미지·품질 기준을 충족하지 못한 글은 검토 대기로
               남습니다. 전송 결과가 불명확한 작업은 자동 재발행하지 않습니다.
             </p>
+            {error && <div role="alert" className="error-notice">저장하지 못했습니다: {error}</div>}
             <button className="button-primary" disabled={busy}>
               {busy ? "저장 중…" : "워크스페이스 저장"}
             </button>
