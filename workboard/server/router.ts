@@ -27,8 +27,13 @@ import { advanceHarness, enqueueApproved } from "./harness";
 import { measure } from "./measurement";
 import { SUPERVISOR_MODEL, MAX_SUPERVISOR_ROUNDS } from "./supervisor";
 import { fireflyReady } from "./firefly";
-import { budgetSettings, saveBudgetSettings, budgetUsage, budgetExamples } from "./budget";
-import { budgetReset,workerModel,reviewModel } from "./model";
+import {
+  budgetSettings,
+  saveBudgetSettings,
+  budgetUsage,
+  budgetExamples,
+} from "./budget";
+import { budgetReset, workerModel, reviewModel } from "./model";
 export async function onRequest({
   request,
   env,
@@ -214,6 +219,12 @@ export async function onRequest({
           new Date().toISOString(),
         )
         .run();
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE agent_workflows SET status='pending',error=NULL,updated_at=? WHERE site_id=? AND stage='photo_editor' AND status='failed' AND error LIKE '%MEDIA_REVIEW%' AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted'))",
+      )
+        .bind(new Date().toISOString(), w.site_id)
+        .run();
+      wakeHarness(env, waitUntil);
       return json({ id }, 201);
     }
     if (route === "auth/session" && method === "GET")
@@ -488,7 +499,13 @@ export async function onRequest({
         .all();
       return json({
         workspace: w,
-        orchestration: {runtime:"Cloudflare Queues",supervisor_model:reviewModel(env),worker_model:workerModel(env),max_review_rounds:MAX_SUPERVISOR_ROUNDS,background:true},
+        orchestration: {
+          runtime: "Cloudflare Queues",
+          supervisor_model: reviewModel(env),
+          worker_model: workerModel(env),
+          max_review_rounds: MAX_SUPERVISOR_ROUNDS,
+          background: true,
+        },
         connection: await readiness(w, env),
         media: {
           pexels: !!env.PEXELS_API_KEY,
@@ -630,25 +647,50 @@ export async function onRequest({
     if (route === "settings" && method === "GET")
       return json({
         runtime: "Cloudflare Pages + Cron Worker",
-        ai_ready: env.AI_ENABLED === "true" && !!(env.AI_PROVIDER === "gemini" ? env.GEMINI_API_KEY : env.ANTHROPIC_API_KEY),
-        ai_provider: env.AI_PROVIDER==="gemini"?"gemini":"anthropic",
-        ai_models: {worker:workerModel(env),supervisor:reviewModel(env)},
+        ai_ready:
+          env.AI_ENABLED === "true" &&
+          !!(env.AI_PROVIDER === "gemini"
+            ? env.GEMINI_API_KEY
+            : env.ANTHROPIC_API_KEY),
+        ai_provider: env.AI_PROVIDER === "gemini" ? "gemini" : "anthropic",
+        ai_models: { worker: workerModel(env), supervisor: reviewModel(env) },
         database_ready: !!env.WORKBOARD_DB,
         workspaces: await Promise.all(catalog.map((w) => readiness(w, env))),
         scheduler: "blog-agent-workboard-scheduler",
         blogger_owner: "cloudflare",
       });
     if (route === "reports" && method === "GET") {
-      const w = await workspace(env, url.searchParams.get("site_id") || active());
-      const runs = await env.WORKBOARD_DB.prepare("SELECT * FROM ai_runs WHERE substr(article_key,1,instr(article_key,'/')-1)=? ORDER BY created_at DESC LIMIT 100").bind(w.site_id).all();
-      const usage = await budgetUsage(env,w.site_id);
-      return json({site_id:w.site_id,workspace_name:w.name,runs:runs.results,budget:usage.monthly,month:usage.month,limits:await budgetSettings(env,w.site_id),weekly:usage.weekly,examples:await budgetExamples(env,w.site_id),resets:{weekly:budgetReset("weekly"),monthly:budgetReset("monthly")}});
+      const w = await workspace(
+        env,
+        url.searchParams.get("site_id") || active(),
+      );
+      const runs = await env.WORKBOARD_DB.prepare(
+        "SELECT * FROM ai_runs WHERE substr(article_key,1,instr(article_key,'/')-1)=? ORDER BY created_at DESC LIMIT 100",
+      )
+        .bind(w.site_id)
+        .all();
+      const usage = await budgetUsage(env, w.site_id);
+      return json({
+        site_id: w.site_id,
+        workspace_name: w.name,
+        runs: runs.results,
+        budget: usage.monthly,
+        month: usage.month,
+        limits: await budgetSettings(env, w.site_id),
+        weekly: usage.weekly,
+        examples: await budgetExamples(env, w.site_id),
+        resets: {
+          weekly: budgetReset("weekly"),
+          monthly: budgetReset("monthly"),
+        },
+      });
     }
     if (route === "budget" && method === "PUT") {
-      const input = await body<{site_id:string}>(request);
-      if (typeof input?.site_id !== "string" || !input.site_id) throw new HttpError(400,"예산을 설정할 워크스페이스를 선택하세요.");
-      const w = await workspace(env,input.site_id);
-      const settings = await saveBudgetSettings(env,w.site_id,input);
+      const input = await body<{ site_id: string }>(request);
+      if (typeof input?.site_id !== "string" || !input.site_id)
+        throw new HttpError(400, "예산을 설정할 워크스페이스를 선택하세요.");
+      const w = await workspace(env, input.site_id);
+      const settings = await saveBudgetSettings(env, w.site_id, input);
       wakeHarness(env, waitUntil);
       return json(settings);
     }

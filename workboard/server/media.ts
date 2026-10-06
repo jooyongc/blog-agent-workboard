@@ -1,5 +1,6 @@
 import type { Env } from "./env";
 import type { Workspace, Article } from "../shared/types";
+import { creativeAsset, fireflyReady } from "./firefly";
 import { HttpError } from "./http";
 import library from "../shared/licensed-media.json";
 export type StockPhoto = {
@@ -12,144 +13,30 @@ export type StockPhoto = {
   alt: string;
   license_url: string;
 };
-async function pexelsPhotos(
-  env: Env,
-  query: string,
-  count = 2,
-): Promise<StockPhoto[]> {
-  const key = typeof env.PEXELS_API_KEY === "string" ? env.PEXELS_API_KEY : "";
-  if (!key)
-    throw new HttpError(
-      503,
-      "무료 사진 검색 연결이 필요합니다. Cloudflare에 PEXELS_API_KEY를 설정하세요.",
-    );
-  let res = await fetch(
-    "https://api.pexels.com/v1/search?" +
-      new URLSearchParams({ query, per_page: "15", orientation: "landscape" }),
-    { headers: { Authorization: key }, signal: AbortSignal.timeout(30000) },
+export function koreanMedia(description: string) {
+  return (
+    /korea|korean|seoul|busan|jeju|incheon|한국|서울|부산|제주/i.test(
+      description,
+    ) && !/japan|tokyo|kyoto|osaka|日本|東京|京都|일본|도쿄/i.test(description)
   );
-  if (!res.ok)
-    throw new HttpError(502, "무료 사진 검색을 완료하지 못했습니다.");
-  let data = (await res.json()) as {
-    photos?: {
-      id: number;
-      url: string;
-      photographer: string;
-      photographer_url: string;
-      alt: string;
-      src: { large: string };
-    }[];
-  };
-  if ((data.photos?.length ?? 0) < count) {
-    const simple = /food|dining|meal|banchan|restaurant/i.test(query)
-      ? "Korean food"
-      : /skin|beauty|cosmetic|makeup/i.test(query)
-        ? "skincare"
-        : /airport|flight/i.test(query)
-          ? "Incheon airport"
-          : /shopping|tax|duty|refund/i.test(query)
-            ? "Seoul shopping"
-            : /busan/i.test(query)
-              ? "Busan"
-              : /korea|seoul/i.test(query)
-                ? "Seoul"
-                : "Korea travel";
-    res = await fetch(
-      "https://api.pexels.com/v1/search?" +
-        new URLSearchParams({
-          query: simple,
-          per_page: "15",
-          orientation: "landscape",
-        }),
-      { headers: { Authorization: key }, signal: AbortSignal.timeout(30000) },
-    );
-    if (!res.ok)
-      throw new HttpError(502, "무료 사진 검색을 완료하지 못했습니다.");
-    data = (await res.json()) as typeof data;
-  }
-  const photos = (data.photos ?? [])
-    .filter(
-      (x) =>
-        x.src?.large?.startsWith("https://images.pexels.com/") &&
-        x.url.startsWith("https://www.pexels.com/"),
-    )
-    .slice(0, count)
-    .map((x) => ({
-      id: String(x.id),
-      provider: "Pexels" as const,
-      url: x.src.large,
-      page: x.url,
-      photographer: x.photographer,
-      photographer_url: x.photographer_url,
-      alt: x.alt || query,
-      license_url: "https://www.pexels.com/license/",
-    }));
-  if (photos.length < count)
-    throw new HttpError(
-      409,
-      "주제에 맞는 무료 사진을 2장 이상 찾지 못했습니다. 검색 방향을 구체화해 주세요.",
-    );
-  return photos;
 }
-async function unsplashPhotos(
-  env: Env,
-  query: string,
-  count: number,
-): Promise<StockPhoto[]> {
-  const key =
-    typeof env.UNSPLASH_ACCESS_KEY === "string" ? env.UNSPLASH_ACCESS_KEY : "";
-  if (!key) return [];
-  const headers = { Authorization: "Client-ID " + key, "Accept-Version": "v1" };
-  const response = await fetch(
-    "https://api.unsplash.com/search/photos?" +
-      new URLSearchParams({
-        query,
-        per_page: "10",
-        orientation: "landscape",
-        content_filter: "high",
-      }),
-    { headers, signal: AbortSignal.timeout(30000) },
+export function approvedMedia(article: Article) {
+  const images = article.images || [];
+  const inline = [
+    ...article.content_md.matchAll(/!\[[^\]]*\]\((https:\/\/[^)]+)\)/g),
+  ].map((m) => m[1]);
+  return (
+    images.length >= 2 &&
+    inline.length >= 2 &&
+    images.every(
+      (p) =>
+        ["Adobe Stock", "Adobe Firefly"].includes(p.provider) &&
+        koreanMedia(p.alt) &&
+        !!p.license_url &&
+        article.content_md.includes(p.url),
+    ) &&
+    inline.every((url) => images.some((p) => p.url === url))
   );
-  if (!response.ok) return [];
-  const data = (await response.json()) as {
-    results: {
-      id: string;
-      alt_description: string;
-      urls: { regular: string };
-      links: { html: string; download_location: string };
-      user: { name: string; links: { html: string } };
-    }[];
-  };
-  const selected = data.results
-    .filter(
-      (x) =>
-        x.urls.regular.startsWith("https://images.unsplash.com/") &&
-        x.links.download_location.startsWith("https://api.unsplash.com/"),
-    )
-    .slice(0, count);
-  const result: StockPhoto[] = [];
-  for (const x of selected) {
-    const tracking = await fetch(x.links.download_location, {
-      headers,
-      signal: AbortSignal.timeout(20000),
-    });
-    if (!tracking.ok) continue;
-    const credit = (url: string) =>
-      url +
-      (url.includes("?") ? "&" : "?") +
-      "utm_source=blog_agent_workboard&utm_medium=referral";
-    result.push({
-      id: x.id,
-      provider: "Unsplash",
-      url: x.urls.regular,
-      page: credit(x.links.html),
-      photographer: x.user.name,
-      photographer_url: credit(x.user.links.html),
-      alt: x.alt_description || query,
-      license_url: "https://unsplash.com/license",
-    });
-  }
-  return result;
 }
 export async function stockPhotos(
   env: Env,
@@ -172,6 +59,11 @@ export async function stockPhotos(
             source_url: string;
           }>()
       ).results
+        .filter(
+          (x) =>
+            ["Adobe Stock", "Adobe Firefly"].includes(x.provider) &&
+            koreanMedia(x.title + " " + x.tags_json),
+        )
         .filter((x) =>
           JSON.parse(x.tags_json).some((tag: string) =>
             query.toLowerCase().includes(tag),
@@ -192,6 +84,8 @@ export async function stockPhotos(
     .filter(
       (x) =>
         x.type === "photo" &&
+        ["purchased", "just_purchased"].includes(x.license_state) &&
+        koreanMedia(x.alt) &&
         x.tags.some((tag) => query.toLowerCase().includes(tag)),
     )
     .map((x) => ({
@@ -206,24 +100,10 @@ export async function stockPhotos(
     }));
   if (uploaded.length + adobe.length >= count)
     return [...uploaded, ...adobe].slice(0, count);
-  const splash = await unsplashPhotos(
-    env,
-    query,
-    Math.max(1, count - adobe.length),
-  ).catch(() => []);
-  let photos = [...uploaded, ...adobe, ...splash].slice(0, count);
-  if (photos.length < count) {
-    const pexels = await pexelsPhotos(env, query, count - photos.length).catch(
-      () => [],
-    );
-    photos = [...photos, ...pexels].slice(0, count);
-  }
-  if (photos.length < count)
-    throw new HttpError(
-      409,
-      "주제에 맞는 무료 사진을 2장 이상 확보하지 못했습니다. 검색 연결을 확인하세요.",
-    );
-  return photos;
+  throw new HttpError(
+    409,
+    "MEDIA_REVIEW: 한국 배경·주제에 맞는 Adobe Stock 또는 직접 생성 이미지를 확보해야 합니다. 공개 사진 API로 대체하지 않습니다.",
+  );
 }
 export function licensedVideos(query: string) {
   return library.filter(
@@ -286,14 +166,67 @@ export async function illustrate(
   articles: Record<string, Article>,
 ) {
   const result = structuredClone(articles);
+  for (const article of Object.values(result)) {
+    const rejected = (article.images || []).filter(
+      (p) =>
+        !["Adobe Stock", "Adobe Firefly"].includes(p.provider) ||
+        !koreanMedia(p.alt),
+    );
+    for (const photo of rejected) {
+      article.content_md = article.content_md.replace(
+        /!\[[^\]]*\]\((https:\/\/[^)]+)\)/g,
+        (match, url) => (url === photo.url ? "" : match),
+      );
+      article.content_md = article.content_md
+        .split("\n")
+        .filter(
+          (line) =>
+            !(line.includes(photo.page) && /Photo:|写真|Credit/i.test(line)),
+        )
+        .join("\n");
+    }
+    article.images = (article.images || []).filter(
+      (p) => !rejected.includes(p),
+    );
+  }
   const first = result[w.languages[0]];
   const query = first.primary_keyword || first.title;
-  const photos = await stockPhotos(
-    env,
-    query,
-    Math.max(2, Math.min(4, w.strategy.required_images)),
-    w.site_id,
-  );
+  let photos: StockPhoto[];
+  try {
+    photos = await stockPhotos(
+      env,
+      query,
+      Math.max(2, Math.min(4, w.strategy.required_images)),
+      w.site_id,
+    );
+  } catch (error) {
+    if (!fireflyReady(env)) throw error;
+    photos = [];
+    for (
+      let i = 0;
+      i < Math.max(2, Math.min(4, w.strategy.required_images));
+      i++
+    ) {
+      const prompt = `Editorial illustration for ${first.title}. South Korea only, Korean cultural and architectural context, no Japanese imagery, flags, logos or invented documentary claims. ${i % 2 === 0 ? "Wide overview scene" : "Close-up detail illustrating the practical topic"}. No text. Illustrative, not a photograph of a verified place.`;
+      const asset = await creativeAsset(
+        env,
+        `${w.site_id}-${slug}-approved-image-${i}`,
+        w.site_id,
+        "image",
+        prompt,
+      );
+      photos.push({
+        id: `${slug}-${i}`,
+        provider: "Adobe Firefly",
+        url: asset.url,
+        page: "https://www.adobe.com/products/firefly.html",
+        photographer: "Adobe Firefly",
+        photographer_url: "https://www.adobe.com/products/firefly.html",
+        alt: `South Korean editorial illustration: ${first.title} (${i + 1})`,
+        license_url: "https://www.adobe.com/legal/terms.html",
+      });
+    }
+  }
   for (const lang of w.languages)
     result[lang] = insertStockPhotos(result[lang], photos);
   const registered = (

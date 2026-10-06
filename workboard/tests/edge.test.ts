@@ -24,7 +24,7 @@ import {
   planRepair,
   recoverWorkflows,
 } from "../server/harness";
-import { insertStockPhotos } from "../server/media";
+import { approvedMedia, koreanMedia, stockPhotos, insertStockPhotos } from "../server/media";
 import { creativeAsset, PendingMedia } from "../server/firefly";
 import { verifyGenerated } from "../server/automation";
 import { plainEvidence, reconcileSources } from "../server/strategy";
@@ -1627,4 +1627,13 @@ test("malformed received responses retry once but unknown charges stay gated", a
  test("Gemini text chunks preserve JSON string boundaries", async () => {
  const result=await parseGemini({candidates:[{finishReason:"STOP",content:{parts:[{text:'{"content_md":"first '},{text:'second"}'}]}}]});
  assert.deepEqual(result.data,{content_md:"first second"});
+ });
+
+ test("Korean Adobe media policy rejects Japanese and public API assets without fallback", async () => {
+  assert.equal(koreanMedia("Kyoto Japan temple for Korea story"),false);
+  assert.equal(koreanMedia("Seoul Korean subway interior"),true);
+  const {env}=environment();const previous=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>{calls++;throw Error("Public stock API must not run");};
+  try {await assert.rejects(()=>stockPhotos(env,"Korean bowing etiquette",2,"koreabylocal"),/MEDIA_REVIEW/);assert.equal(calls,0);}finally{globalThis.fetch=previous;}
+  const {input}=supervisorFixture();assert.equal(approvedMedia(input.translations.en),false);
  });

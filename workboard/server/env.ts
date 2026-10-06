@@ -1,4 +1,5 @@
 export type Env = {
+  MEDIA_POLICY?: string;
   [name: string]: unknown;
   SCHEDULER_TOKEN?: string;
   CONNECTION_SECRET?: string;

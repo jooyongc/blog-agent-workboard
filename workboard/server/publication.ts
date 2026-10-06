@@ -1,3 +1,4 @@
+import { approvedMedia } from "./media";
 import type { Env } from "./env";
 import type { Workspace, DraftInput } from "../shared/types";
 import { connection, draftPayload, renderMarkdown } from "./content";
@@ -90,6 +91,19 @@ export async function publishJob(
   input: DraftInput,
   mode: "draft" | "publish",
 ) {
+  if (w.schedule.owner === "aside")
+    throw new HttpError(
+      409,
+      "Korea Buy List는 Aside에서 발행합니다. Cloudflare 전송은 중지되었습니다.",
+    );
+  if (
+    env.MEDIA_POLICY === "adobe-generated" &&
+    w.languages.some((lang) => !approvedMedia(input.translations[lang]))
+  )
+    throw new HttpError(
+      409,
+      "MEDIA_REVIEW: 한국 배경에 맞는 Adobe Stock·직접 생성 이미지 2장 이상으로 교체해야 합니다.",
+    );
   const date = new Date().toISOString();
   if (w.integration === "blogger") {
     const token = await bloggerToken(w, env),

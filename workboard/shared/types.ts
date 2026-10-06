@@ -38,6 +38,7 @@ export type Connection = {
   refresh_token_env?: string;
 };
 export type Schedule = {
+  owner?: "cloudflare" | "aside";
   enabled: boolean;
   interval_days: number;
   hour_kst: number;

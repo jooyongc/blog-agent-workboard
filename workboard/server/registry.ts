@@ -155,6 +155,8 @@ export function validateWorkspace(input: Workspace) {
     throw new HttpError(400, "SEO·AEO·GEO 전략 설정을 확인해 주세요.");
   if (s.gsc_url) publicHttps(s.gsc_url);
   const a = input.schedule;
+  if(a?.owner && !["aside","cloudflare"].includes(a.owner)) throw new HttpError(400,"발행 주체를 확인하세요.");
+  if(a?.owner === "aside" && a.enabled) throw new HttpError(409,"Aside에서 정기 발행하는 사이트의 Cloudflare 자동 발행을 켤 수 없습니다.");
   if (
     !a ||
     typeof a.enabled !== "boolean" ||

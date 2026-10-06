@@ -405,8 +405,8 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
                   })
                 }
               >
-                <option value="stock">무료 사진·라이선스 Stock</option>
-                <option value="hybrid">무료 사진 + Adobe 생성 이미지</option>
+                <option value="stock">Adobe Stock · 직접 생성 이미지</option>
+                <option value="hybrid">Adobe Stock + Adobe 생성 이미지</option>
               </select>
               <small>
                 Adobe 생성은 Firefly Services API 연결 후 활성화됩니다.
@@ -628,6 +628,7 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
             <label className="review-checkbox">
               <input
                 type="checkbox"
+                disabled={editing.schedule.owner === "aside"}
                 checked={editing.schedule.enabled}
                 onChange={(e) =>
                   edit("schedule", {
@@ -636,7 +637,7 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
                   })
                 }
               />
-              자동 발행 사용
+              {editing.schedule.owner === "aside" ? "Aside 정기 발행 사용 · Cloudflare 전송 중지" : "자동 발행 사용"}
             </label>
             <label className="review-checkbox">
               <input
@@ -1157,16 +1158,15 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
         </span>
       </section>
       <p className="flow-description">
-        무료 사진: {data?.media?.pexels ? "Pexels 연결" : "Pexels 미연결"} ·{" "}
-        {data?.media?.unsplash ? "Unsplash 연결" : "Unsplash 미연결"} · Adobe
-        라이선스 자료 사용 가능 · Firefly:{" "}
-        {data?.media?.firefly ? "연결됨" : "Developer API 연결 대기"}
+        이미지 정책: 한국 배경·주제에 맞는 Adobe Stock 또는 직접 생성 이미지 ·
+        Firefly: {data?.media?.firefly ? "연결됨" : "API 이용 권한 연결 대기"} ·
+        부적합한 이미지가 있으면 발행을 멈춥니다.
       </p>
       <div className="workflow-guide">
         {[
           "공식 출처 조사",
           "독자별 집필",
-          "무료 사진 선정",
+          "주제별 Adobe 이미지 선정",
           "SEO·AEO·GEO 검증",
           "상위 검토 · " + modelLabel(data?.orchestration?.supervisor_model),
           "필요 시 보완 → 재검증",
@@ -1184,7 +1184,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
           <span
             className={`status-pill ${active.schedule.enabled ? "green" : "neutral"}`}
           >
-            {active.schedule.enabled ? "자동 발행 켜짐" : "자동 발행 꺼짐"}
+            {active.schedule.owner === "aside" ? "Aside 정기 발행" : active.schedule.enabled ? "자동 발행 켜짐" : "자동 발행 꺼짐"}
           </span>
         </div>
         <div className="form-body">
@@ -1196,6 +1196,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
               ? "공개 발행"
               : "원격 초안 저장"}
           </p>
+          {active.schedule.owner === "aside" && <p>발행 일정과 실행은 기존 Aside 루틴에서 관리합니다. 아래 Cloudflare 예약 정보는 실행되지 않습니다.</p>}
           <p>
             다음 실행:{" "}
             {active.schedule.next_run
@@ -1710,8 +1711,8 @@ function MediaLibrary({ active }: Pick<Props, "active">) {
     <details className="studio-panel form-body">
       <summary>Adobe 웹 생성물·라이선스 미디어 등록</summary>
       <p className="flow-description">
-        Firefly 웹에서 만든 이미지·영상 또는 무료 라이선스를 받은 Stock 원본을
-        저장해 에이전트가 재사용할 수 있습니다.
+        Firefly 웹에서 만든 이미지·영상 또는 라이선스를 확보한 Adobe Stock
+        원본을 저장해 에이전트가 재사용할 수 있습니다.
       </p>
       <form onSubmit={(e) => void upload(e)}>
         <label className="field-label">
@@ -1747,7 +1748,7 @@ function MediaLibrary({ active }: Pick<Props, "active">) {
             <input
               required
               name="license_reference"
-              placeholder="무료 라이선스 이력의 에셋 ID 또는 참조"
+              placeholder="Adobe 다운로드·라이선스 이력의 에셋 ID 또는 참조"
             />
           </label>
         )}

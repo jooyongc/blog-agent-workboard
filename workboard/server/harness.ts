@@ -3,7 +3,7 @@ import type { DraftInput } from "../shared/types";
 import { workspace, readiness } from "./registry";
 import { research } from "./strategy";
 import { generate } from "./ai";
-import { illustrate } from "./media";
+import { illustrate, approvedMedia } from "./media";
 import { verifyGenerated } from "./automation";
 import { quality } from "./seo";
 import { validateDraft } from "./content";
@@ -231,6 +231,7 @@ export async function enqueueApproved(env: Env) {
     "SELECT t.id,t.site_id,t.title,t.category FROM topic_ideas t WHERE t.status='approved' AND NOT EXISTS(SELECT 1 FROM agent_workflows f WHERE f.topic_id=t.id) ORDER BY t.created_at LIMIT 5",
   ).all<{ id: string; site_id: string; title: string; category: string }>();
   for (const t of topics.results) {
+    if ((await workspace(env, t.site_id)).schedule.owner === "aside") continue;
     const id = crypto.randomUUID(),
       now = new Date().toISOString();
     const slug =
@@ -296,7 +297,7 @@ export async function advanceHarness(env: Env) {
     .bind(new Date().toISOString())
     .run();
   const task = await env.WORKBOARD_DB.prepare(
-    "SELECT * FROM agent_workflows WHERE status='pending' ORDER BY updated_at LIMIT 1",
+    "SELECT * FROM agent_workflows WHERE status='pending' AND site_id NOT IN (SELECT site_id FROM workspace_records WHERE json_extract(config_json,'$.schedule.owner')='aside') ORDER BY updated_at LIMIT 1",
   ).first<{
     job_id: string;
     topic_id: string;
@@ -382,8 +383,10 @@ export async function advanceHarness(env: Env) {
       if (
         w.languages.some(
           (l) =>
+            (env.MEDIA_POLICY === "adobe-generated" &&
+              !approvedMedia(payload.input.translations[l])) ||
             (payload.input.translations[l].images?.length || 0) <
-            Math.max(2, w.strategy.required_images),
+              Math.max(2, w.strategy.required_images),
         )
       )
         payload.input.translations = await illustrate(
