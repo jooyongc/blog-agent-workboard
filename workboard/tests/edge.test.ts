@@ -13,6 +13,7 @@ import { articleUrl, workspace } from "../server/registry";
 import { quality, extractFaq, schema } from "../server/seo";
 import { googleCredentials } from "../server/oauth";
 import { publishJob } from "../server/publication";
+import { prepareForReview, validateSupervision, articleFingerprint, SUPERVISOR_MODEL } from "../server/supervisor";
 import { modelJson, BudgetWait, budgetReset } from "../server/model";
 import {
   advanceHarness,
@@ -64,6 +65,7 @@ function db() {
     "0008_media_library.sql",
     "0009_budget_settings.sql",
     "0010_workspace_budgets.sql",
+    "0011_supervisor_model.sql",
   ])
     d.exec(
       fs.readFileSync(
@@ -1343,9 +1345,9 @@ test("known factual errors are prepared for rewrite while the budget wait remain
   await recoverWorkflows(env,Date.parse("2026-10-06T01:00:00Z"));
   await recoverWorkflows(env,Date.parse("2026-10-06T01:00:01Z"));
   const result=d.sqlite.prepare("SELECT stage,status,payload_json FROM agent_workflows WHERE job_id='waiting-repair'").get() as any;
-  assert.equal(result.stage,"writer");assert.equal(result.status,"budget_wait");
+  assert.equal(result.stage,"supervisor");assert.equal(result.status,"budget_wait");
   const saved=JSON.parse(result.payload_json);
-  assert.equal(saved.repair_attempts,2);assert.deepEqual(saved.repair.target_languages,["en"]);
+  assert.equal(saved.repair_attempts,1);
   assert.equal(saved.recovery.retry_at,payload.recovery.retry_at);
 });
 
@@ -1429,4 +1431,75 @@ test("changing a workspace budget resumes only its own waiting agents", async ()
   await recoverWorkflows(env,Date.parse("2026-10-06T01:00:00Z"));
   assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows WHERE site_id='koreabylocal'").get() as any).status,"pending");
   assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows WHERE site_id='koreadecode'").get() as any).status,"budget_wait");
+});
+
+function supervisorFixture() {
+  const w=structuredClone(CATALOG[2]);
+  const urls=["https://english.visitseoul.net/miscellaneous","https://english.visitseoul.net/subway"];
+  const photos=[1,2].map(i=>({id:String(i),provider:"Pexels" as const,url:`https://images.pexels.com/${i}.jpg`,page:`https://www.pexels.com/photo/${i}`,photographer:"Author",photographer_url:"https://www.pexels.com/@author",alt:"Seoul context",license_url:"https://www.pexels.com/license"}));
+  const article={title:"Seoul subway night guide",meta_description:"A sourced Seoul subway guide.",tags:["Seoul"],format:"guide",content_md:`## Quick Answer\n${"Seoul subway is a useful travel option for visitors who want to understand the city and plan a reliable journey with official information before they leave their hotel. Check the station timetable and remember that different days can have different operating hours."}\n\n## What are the hours?\nWeekdays 05:00 to 25:00 means 01:00 next day. Weekends close at 24:00.\n\n## How do visitors plan?\nUse the official timetable.\n\n## Why check the day?\nThe service is different on weekdays and weekends.\n\n## FAQ\nQ: What does 25:00 mean?\nA: It means 01:00 the next day.\nQ: What does 24:00 mean?\nA: It means midnight.\nQ: Where do I check?\nA: Use official information.\n\nLast updated: 2026-10-06\n\nSources: [Official hours](${urls[0]}), [Subway information](${urls[1]})`,images:photos};
+  const prepared=prepareForReview(article,{sources:urls.map(url=>({url,claim:"Weekday hours",evidence:"Transportation Subway: 05:00 - 25:00 (Weekdays) / 05:00 – 24:00 (Weekends & Holidays)",checked_at:"2026-10-05"}))},"en");
+  const input:DraftInput={site_id:w.site_id,slug:"review-fixture",category:"Travel",request_id:"review-fixture",reviewed:true,translations:{en:prepared}};
+  const research={briefs:{en:{sources:urls.map(url=>({url,claim:"Weekday hours",evidence:"Transportation Subway: 05:00 - 25:00 (Weekdays) / 05:00 – 24:00 (Weekends & Holidays)",checked_at:"2026-10-05"}))}}};
+  const decision={action:"approve",reason:"공식 근거와 표기 동치를 확인했습니다.",instructions:"",target_languages:["en"],claims:[{lang:"en",claim:"25:00 is 01:00 next day",status:"verified",source_url:urls[0],evidence_quote:"05:00 - 25:00 (Weekdays)"}]};
+  return {w,input,research,decision};
+}
+test("senior approval requires real quotes, all languages and structural checks", () => {
+  const {w,input,research,decision}=supervisorFixture();
+  assert.equal(quality(input.translations.en,w,"en").passed,true);
+  assert.equal(validateSupervision(decision,w,input,research.briefs).action,"approve");
+  assert.equal(validateSupervision({...decision,claims:[{...decision.claims[0],evidence_quote:"invented supporting sentence"}]},w,input,research.briefs).action,"edit");
+  assert.equal(validateSupervision({...decision,claims:[]},w,input,research.briefs).action,"edit");
+  const noLinks=structuredClone(input);noLinks.translations.en.content_md="short";
+  assert.equal(validateSupervision(decision,w,noLinks,research.briefs).action,"edit");
+});
+test("format recovery restores exact sources and photos without changing the Quick Answer", () => {
+  const {w,input,research}=supervisorFixture();
+  const article=input.translations.en;
+  const oldAnswer=article.content_md.match(/## Quick Answer\n([\s\S]*?)(?=\n## )/)![1];
+  const repaired=prepareForReview({...article,content_md:article.content_md.replace(/Sources:[\s\S]*$/, "Sources: names without links")},research.briefs.en,"en");
+  assert.equal(repaired.content_md.match(/## Quick Answer\n([\s\S]*?)(?=\n## )/)![1].trim(),oldAnswer.trim());
+  assert.equal((repaired.content_md.match(/!\[/g)||[]).length,2);
+  assert.equal(quality(repaired,w,"en").passed,true);
+});
+test("Sonnet costs and model identity use the correct rates", async () => {
+  const {env,d}=environment();env.ANTHROPIC_API_KEY="test";
+  const original=globalThis.fetch;
+  globalThis.fetch=async (_url,init)=>{
+    assert.equal(JSON.parse(String(init?.body)).model,SUPERVISOR_MODEL);
+    return Response.json({stop_reason:"end_turn",usage:{input_tokens:1000,output_tokens:100},content:[{type:"text",text:'{"ok":true}'}]});
+  };
+  try {
+    const result=await modelJson(env,"koreadecode/model-price","system",{},1000,undefined,SUPERVISOR_MODEL);
+    assert.equal(result.cost_usd,0.003);
+    const run=d.sqlite.prepare("SELECT model,actual FROM ai_runs").get() as any;
+    assert.equal(run.model,SUPERVISOR_MODEL);assert.equal(run.actual,0.003);
+  } finally {globalThis.fetch=original;}
+});
+test("a stalled verifier is supervised, edited and approved entirely in the background", async () => {
+  const {env,d}=environment();env.ANTHROPIC_API_KEY="test";
+  const {w,input,research,decision}=supervisorFixture();
+  const payload={title:input.translations.en.title,slug:input.slug,category:input.category,input,research,repair_attempts:2,quality:{factual:false}};
+  d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('review-fixture',?,?,?,'Travel','{}','review','now','now')").run(w.site_id,input.slug,input.translations.en.title);
+  d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES('review-fixture','topic',?,'verifier','failed',?,'now','now')").run(w.site_id,JSON.stringify(payload));
+  const original=globalThis.fetch;let supervisorCalls=0;
+  globalThis.fetch=async (_url,init)=>{
+    const body=JSON.parse(String(init?.body));let data:any;
+    if(body.system.includes("senior editorial supervisor")) data=++supervisorCalls===1 ? {...decision,action:"edit",instructions:"Keep supported times and fix the prior report."} : decision;
+    else if(body.system.includes("senior correction editor")) data=input.translations.en;
+    else data={passed:true,reason:"supported",claims:decision.claims};
+    return Response.json({stop_reason:"end_turn",usage:{input_tokens:100,output_tokens:100},content:[{type:"text",text:JSON.stringify(data)}]});
+  };
+  try {
+    for(let i=0;i<5;i++) await advanceHarness(env);
+    const state=d.sqlite.prepare("SELECT stage,status,payload_json FROM agent_workflows").get() as any;
+    assert.equal(state.stage,"publisher");assert.equal(state.status,"pending");
+    const saved=JSON.parse(state.payload_json);
+    assert.equal(saved.supervision.length,2);assert.equal(saved.supervision[0].action,"edit");assert.equal(saved.supervision[1].action,"approve");
+    assert.equal(saved.supervisor_approval,await articleFingerprint(saved.input));
+    saved.input.translations.en.title+=" changed";
+    d.sqlite.prepare("UPDATE agent_workflows SET payload_json=?").run(JSON.stringify(saved));
+    const result=await advanceHarness(env);
+    assert.ok("error" in result && result.error?.includes("상위 검토 승인"));
+  } finally {globalThis.fetch=original;}
 });

@@ -77,7 +77,9 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
         method: creating ? "POST" : "PUT",
         body: JSON.stringify(editing),
       });
-      setMessage(`${saved.name} 설정을 저장했습니다. ${saved.schedule.enabled ? `자동 발행 켜짐 · ${saved.schedule.interval_days}일마다 · ${saved.schedule.mode === "draft" ? "비공개 초안 저장" : "공개 발행"}` : "자동 발행 꺼짐"}`);
+      setMessage(
+        `${saved.name} 설정을 저장했습니다. ${saved.schedule.enabled ? `자동 발행 켜짐 · ${saved.schedule.interval_days}일마다 · ${saved.schedule.mode === "draft" ? "비공개 초안 저장" : "공개 발행"}` : "자동 발행 꺼짐"}`,
+      );
       setEditing(null);
       await refresh();
     } catch (e) {
@@ -719,7 +721,11 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
               출처·FAQ·이미지·품질 기준을 충족하지 못한 글은 검토 대기로
               남습니다. 전송 결과가 불명확한 작업은 자동 재발행하지 않습니다.
             </p>
-            {error && <div role="alert" className="error-notice">저장하지 못했습니다: {error}</div>}
+            {error && (
+              <div role="alert" className="error-notice">
+                저장하지 못했습니다: {error}
+              </div>
+            )}
             <button className="button-primary" disabled={busy}>
               {busy ? "저장 중…" : "워크스페이스 저장"}
             </button>
@@ -1118,7 +1124,10 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
   const load = useCallback(
     () =>
       api(`automation?site_id=${active.site_id}`)
-        .then(setData)
+        .then((result) => {
+          setData(result);
+          setError("");
+        })
         .catch((e) => setError(e.message)),
     [active.site_id],
   );
@@ -1134,6 +1143,16 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
         note="아이디어만 승인하세요. 역할별 에이전트가 작업을 이어서 임시 발행까지 완료합니다."
       />
       {note(error)}
+      <section className="orchestration-banner">
+        <div>
+          <strong>Cloudflare 백그라운드 실행</strong>
+          <p>
+            창을 닫거나 다른 페이지로 이동해도 계속됩니다. 상위 검토가 판단하고
+            보완 에이전트에 작업을 배정합니다.
+          </p>
+        </div>
+        <span className="status-pill green">상위 검토 · Sonnet 5.5</span>
+      </section>
       <p className="flow-description">
         무료 사진: {data?.media?.pexels ? "Pexels 연결" : "Pexels 미연결"} ·{" "}
         {data?.media?.unsplash ? "Unsplash 연결" : "Unsplash 미연결"} · Adobe
@@ -1146,7 +1165,9 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
           "독자별 집필",
           "무료 사진 선정",
           "SEO·AEO·GEO 검증",
-          "사이트 임시 발행",
+          "상위 검토 · Sonnet 5.5",
+          "필요 시 보완 → 재검증",
+          "승인된 글 임시 발행",
         ].map((s, i) => (
           <div key={s} className="workflow-step">
             <small>STEP 0{i + 1}</small>
@@ -1214,8 +1235,24 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
           <div className="idea-list">
             {data.jobs.map((j: any) => {
               const report = parseVerification(j.quality_json);
-              const workflow = data?.workflows?.find((f: any) => f.job_id === j.id);
-              const recovery = workflow?.recovery_json ? JSON.parse(workflow.recovery_json) : null;
+              const workflow = data?.workflows?.find(
+                (f: any) => f.job_id === j.id,
+              );
+              const recovery = workflow?.recovery_json
+                ? JSON.parse(workflow.recovery_json)
+                : null;
+              const supervision = workflow?.supervision_json
+                ? JSON.parse(workflow.supervision_json)
+                : [];
+              const roles: Record<string, string> = {
+                researcher: "출처 조사",
+                writer: "독자별 집필",
+                photo_editor: "사진 선정",
+                verifier: "근거·구조 검증",
+                supervisor: "상위 검토",
+                editor: "근거·구조 보완",
+                publisher: "임시 발행",
+              };
               return (
                 <article key={j.id}>
                   <span
@@ -1233,6 +1270,8 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                         generating: "작성 중",
                         agent_pending: "에이전트 자동 실행 대기",
                         verifying: "검증 에이전트 작업 중",
+                        supervising: "상위 에이전트 검토 중",
+                        editing: "에이전트 자동 보완 중",
                         publishing: "임시 발행 중",
                         needs_reconcile: "중단 · 원격 확인",
                       } as Record<string, string>
@@ -1244,47 +1283,139 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                       ? new Date(j.publish_at).toLocaleString("ko-KR", {
                           timeZone: "Asia/Seoul",
                         })
-                      : j.status === "budget_wait" ? "예산 갱신 대기" : "작성 중"}
+                      : j.status === "budget_wait"
+                        ? "예산 갱신 대기"
+                        : "작성 중"}
                   </p>
-                  <div className="agent-stage-list">
-                    {[
-                      "researcher",
-                      "writer",
-                      "photo_editor",
-                      "verifier",
-                      "publisher",
-                    ].map((agent, index) => {
+                  <div
+                    className="orchestration-track"
+                    aria-label="에이전트 실행 단계"
+                  >
+                    {Object.entries(roles).map(([agent, label]) => {
                       const step = data?.steps?.find(
                         (s: any) => s.job_id === j.id && s.agent === agent,
                       );
-                      const labels = [
-                        "출처 조사",
-                        "독자별 집필",
-                        "무료 사진 2장 이상",
-                        "품질·출처 검증",
-                        "임시 발행",
-                      ];
+                      const current =
+                        workflow?.stage === agent &&
+                        ["pending", "running", "budget_wait"].includes(
+                          workflow?.status,
+                        );
+                      const status = current
+                        ? workflow.status === "budget_wait"
+                          ? "예산 대기"
+                          : workflow.status === "running"
+                            ? "실행 중"
+                            : "실행 대기"
+                        : step?.status === "complete"
+                          ? "완료"
+                          : step?.status === "failed"
+                            ? "재검토"
+                            : "대기";
                       return (
-                        <span
+                        <div
                           key={agent}
-                          className={`status-pill ${step?.status === "complete" ? "green" : step?.status === "failed" ? "amber" : "neutral"}`}
+                          aria-current={current ? "step" : undefined}
+                          className={`orchestration-node ${current ? "current" : ""} ${step?.status === "complete" ? "complete" : ""}`}
                         >
-                          {labels[index]} ·{" "}
-                          {step?.status === "complete"
-                            ? "완료"
-                            : step?.status === "running"
-                              ? "진행 중"
-                              : step?.status === "waiting"
-                                ? "자동 재개 대기"
-                              : step?.status === "failed"
-                                ? "확인 필요"
-                                : "대기"}
-                        </span>
+                          <strong>{label}</strong>
+                          <small>
+                            {["supervisor", "editor"].includes(agent)
+                              ? "Sonnet 5.5"
+                              : agent === "writer" ||
+                                  agent === "researcher" ||
+                                  agent === "verifier"
+                                ? "Haiku 4.5"
+                                : "서버 도구"}
+                          </small>
+                          <span>{status}</span>
+                        </div>
                       );
                     })}
                   </div>
+                  {supervision.length > 0 && (
+                    <div className="supervisor-decisions">
+                      <strong>
+                        상위 검토의 판단 · {supervision.length}/
+                        {data?.orchestration?.max_review_rounds || 3}회
+                      </strong>
+                      {supervision.map((decision: any, index: number) => (
+                        <div
+                          key={index}
+                          className={`supervisor-decision ${decision.action === "approve" ? "approved" : ""}`}
+                        >
+                          <span
+                            className={`status-pill ${decision.action === "approve" ? "green" : "amber"}`}
+                          >
+                            {
+                              (
+                                {
+                                  approve: "임시 발행 승인",
+                                  edit: "보완 배정",
+                                  research: "추가 조사 배정",
+                                  blocked: "추가 근거 필요",
+                                } as Record<string, string>
+                              )[decision.action]
+                            }
+                          </span>
+                          <small>
+                            Sonnet 5.5 ·{" "}
+                            {new Date(decision.at).toLocaleTimeString("ko-KR", {
+                              timeZone: "Asia/Seoul",
+                            })}{" "}
+                            KST
+                          </small>
+                          <p>{decision.reason}</p>
+                          {decision.instructions &&
+                            decision.action !== "approve" && (
+                              <p className="flow-description">
+                                보완 지시: {decision.instructions}
+                              </p>
+                            )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <details className="agent-timeline">
+                    <summary>에이전트 실행 이력</summary>
+                    <ol>
+                      {(data?.steps || [])
+                        .filter((step: any) => step.job_id === j.id)
+                        .slice(0, 14)
+                        .reverse()
+                        .map((step: any) => (
+                          <li key={step.id}>
+                            <time>
+                              {new Date(step.started_at).toLocaleTimeString(
+                                "ko-KR",
+                                { timeZone: "Asia/Seoul" },
+                              )}
+                            </time>
+                            <strong>{roles[step.agent] || step.agent}</strong>
+                            <span>
+                              {(
+                                {
+                                  running: "진행",
+                                  complete: "완료",
+                                  failed: "중단",
+                                  waiting: "대기",
+                                } as Record<string, string>
+                              )[step.status] || step.status}
+                            </span>
+                            {step.error && <p>{step.error}</p>}
+                          </li>
+                        ))}
+                    </ol>
+                  </details>
                   {j.error && <p role="alert">{j.error}</p>}
-                  {recovery?.retry_at && <p>자동 재개 예정: {new Date(recovery.retry_at).toLocaleString("ko-KR", {timeZone: "Asia/Seoul"})} KST 이후 정기 실행</p>}
+                  {recovery?.retry_at && (
+                    <p>
+                      자동 재개 예정:{" "}
+                      {new Date(recovery.retry_at).toLocaleString("ko-KR", {
+                        timeZone: "Asia/Seoul",
+                      })}{" "}
+                      KST 이후 정기 실행
+                    </p>
+                  )}
                   {report && (
                     <div className="verification-report" role="alert">
                       <p>{report.reason}</p>

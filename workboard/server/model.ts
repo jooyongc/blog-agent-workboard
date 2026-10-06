@@ -1,14 +1,38 @@
 import type { Env } from "./env";
 import { HttpError } from "./http";
 import { budgetSettings } from "./budget";
+export type ModelId = "claude-haiku-4-5" | "claude-sonnet-5-5";
+export const MODEL_RATES = {
+  "claude-haiku-4-5": { input: 1, output: 5 },
+  "claude-sonnet-5-5": { input: 2, output: 10 },
+} as const;
 export class BudgetWait extends HttpError {
-  constructor(public scope: "weekly" | "monthly" | "article", public retryAt: string, message: string, public revision = 0) { super(429, message); }
+  constructor(
+    public scope: "weekly" | "monthly" | "article",
+    public retryAt: string,
+    message: string,
+    public revision = 0,
+  ) {
+    super(429, message);
+  }
 }
-export function budgetReset(scope: "weekly" | "monthly" | "article", now = Date.now()) {
+export function budgetReset(
+  scope: "weekly" | "monthly" | "article",
+  now = Date.now(),
+) {
   const local = new Date(now + 9 * 3600000);
   return scope === "weekly"
-    ? new Date((Math.floor((now + 9 * 3600000 - 4 * 86400000) / (7 * 86400000)) + 1) * 7 * 86400000 + 4 * 86400000 - 9 * 3600000).toISOString()
-    : new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth() + 1, 1) - 9 * 3600000).toISOString();
+    ? new Date(
+        (Math.floor((now + 9 * 3600000 - 4 * 86400000) / (7 * 86400000)) + 1) *
+          7 *
+          86400000 +
+          4 * 86400000 -
+          9 * 3600000,
+      ).toISOString()
+    : new Date(
+        Date.UTC(local.getUTCFullYear(), local.getUTCMonth() + 1, 1) -
+          9 * 3600000,
+      ).toISOString();
 }
 export async function modelJson(
   env: Env,
@@ -17,6 +41,7 @@ export async function modelJson(
   input: unknown,
   maxTokens = 3500,
   search?: string[],
+  model: ModelId = "claude-haiku-4-5",
 ) {
   if (env.AI_ENABLED !== "true" || !env.ANTHROPIC_API_KEY)
     throw new HttpError(503, "AI 연결이 준비되지 않았습니다.");
@@ -26,12 +51,15 @@ export async function modelJson(
     week = String(
       Math.floor((now + 9 * 3600000 - 4 * 86400000) / (7 * 86400000)),
     );
+  const rates = MODEL_RATES[model];
   const bytes = new TextEncoder().encode(system + JSON.stringify(input)).length;
   const reservation =
-    bytes / 1000000 + (maxTokens * 5) / 1000000 + (search?.length ? 0.1 : 0);
+    (bytes * rates.input) / 1000000 +
+    (maxTokens * rates.output) / 1000000 +
+    (search?.length ? 0.1 : 0);
   try {
     await env.WORKBOARD_DB.prepare(
-      "INSERT INTO ai_runs(id,article_key,month,week,reserved,status,created_at) VALUES(?,?,?,?,?,?,?)",
+      "INSERT INTO ai_runs(id,article_key,month,week,reserved,status,created_at,model) VALUES(?,?,?,?,?,?,?,?)",
     )
       .bind(
         id,
@@ -41,15 +69,26 @@ export async function modelJson(
         reservation,
         "running",
         new Date(now).toISOString(),
+        model,
       )
       .run();
   } catch (error) {
     const detail = String(error);
     if (detail.includes("budget")) {
       const settings = await budgetSettings(env, key.split("/")[0]);
-      const scope = detail.includes("monthly_budget") ? "monthly" : detail.includes("weekly_budget") ? "weekly" : "article";
-      const label = scope === "monthly" ? "월간" : scope === "weekly" ? "주간" : "이 글의";
-      throw new BudgetWait(scope, budgetReset(scope, now), `${label} AI 예산 $${settings[scope].toFixed(2)} 한도에 도달했습니다.`, settings.revision);
+      const scope = detail.includes("monthly_budget")
+        ? "monthly"
+        : detail.includes("weekly_budget")
+          ? "weekly"
+          : "article";
+      const label =
+        scope === "monthly" ? "월간" : scope === "weekly" ? "주간" : "이 글의";
+      throw new BudgetWait(
+        scope,
+        budgetReset(scope, now),
+        `${label} AI 예산 $${settings[scope].toFixed(2)} 한도에 도달했습니다.`,
+        settings.revision,
+      );
     }
     throw new HttpError(503, "AI 예산 예약을 저장하지 못했습니다.");
   }
@@ -66,7 +105,7 @@ export async function modelJson(
       },
       signal: AbortSignal.timeout(120000),
       body: JSON.stringify({
-        model: "claude-haiku-4-5",
+        model,
         max_tokens: maxTokens,
         system,
         messages: [{ role: "user", content: JSON.stringify(input) }],
@@ -101,7 +140,9 @@ export async function modelJson(
       };
     };
     cost =
-      (d.usage.input_tokens + d.usage.output_tokens * 5) / 1000000 +
+      (d.usage.input_tokens * rates.input +
+        d.usage.output_tokens * rates.output) /
+        1000000 +
       (d.usage.server_tool_use?.web_search_requests ?? 0) * 0.01;
     settled = true;
     await env.WORKBOARD_DB.prepare(

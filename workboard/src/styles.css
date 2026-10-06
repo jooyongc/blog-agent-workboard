@@ -2202,3 +2202,113 @@ details summary {
   border-radius: 12px;
   margin: 20px 0;
 }
+
+.orchestration-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid var(--studio-line);
+  border-radius: 14px;
+  background: #eef6ee;
+  margin: 20px 0;
+}
+.orchestration-banner p {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #52674f;
+}
+.orchestration-track {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(115px, 1fr));
+  gap: 9px;
+  margin: 20px 0;
+}
+.orchestration-node {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid var(--studio-line);
+  border-radius: 10px;
+  background: #fff;
+}
+.orchestration-node strong {
+  font-size: 12px;
+}
+.orchestration-node small {
+  font-size: 10px;
+  color: #70806b;
+}
+.orchestration-node span {
+  font-size: 11px;
+  color: #687b62;
+}
+.orchestration-node.complete {
+  background: #edf6ed;
+}
+.orchestration-node.current {
+  border: 2px solid #29684f;
+  box-shadow: 0 0 0 3px #29684f12;
+}
+.supervisor-decisions {
+  margin: 18px 0;
+}
+.supervisor-decision {
+  border-left: 3px solid #d4a55c;
+  padding: 12px 16px;
+  margin-top: 10px;
+  background: #fffbf2;
+  border-radius: 0 8px 8px 0;
+}
+.supervisor-decision.approved {
+  border-color: #29684f;
+  background: #edf6ed;
+}
+.supervisor-decision small {
+  display: block;
+  margin-top: 8px;
+  color: #70806b;
+}
+.supervisor-decision p {
+  font-size: 13px;
+  line-height: 1.8;
+}
+.agent-timeline {
+  margin: 14px 0;
+}
+.agent-timeline ol {
+  list-style: none;
+  padding: 0 0 0 15px;
+  border-left: 2px solid var(--studio-line);
+}
+.agent-timeline li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 9px 0;
+  font-size: 12px;
+}
+.agent-timeline time {
+  color: #70806b;
+}
+.agent-timeline li p {
+  width: 100%;
+  margin: 0;
+  color: #9f5835;
+}
+@media (max-width: 650px) {
+  .orchestration-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .orchestration-track {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.supervisor-decision p,
+.agent-timeline li p {
+  overflow-wrap: anywhere;
+}

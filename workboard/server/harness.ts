@@ -11,12 +11,21 @@ import { publishJob } from "./publication";
 import { HttpError } from "./http";
 import { BudgetWait } from "./model";
 import { budgetSettings } from "./budget";
+import {
+  supervise,
+  editUnderSupervision,
+  prepareForReview,
+  articleFingerprint,
+  MAX_SUPERVISOR_ROUNDS,
+  SUPERVISOR_MODEL,
+} from "./supervisor";
 import { creativeAsset, fireflyReady, PendingMedia } from "./firefly";
 const stages = [
   "researcher",
   "writer",
   "photo_editor",
   "verifier",
+  "supervisor",
   "publisher",
 ];
 /**
@@ -41,44 +50,112 @@ export function canRepairAgain(
 export function planRepair(payload: any, w: { languages: string[] }) {
   const report = payload.quality?.verification;
   if (!report || !payload.input || !payload.research?.briefs) return false;
-  const issues = Object.values(payload.quality.languages || {}).flatMap((q: any) => q.issues || []);
+  const issues = Object.values(payload.quality.languages || {}).flatMap(
+    (q: any) => q.issues || [],
+  );
   const failing = (report.claims?.length || 0) + issues.length;
   if (report.passed && !failing) return false;
-  const previous = payload.repair_failing ?? (payload.repair?.unsupported_claims ? payload.repair.unsupported_claims.length + (payload.repair.issues?.length || 0) : undefined);
-  if (!canRepairAgain(payload.repair_attempts ?? 0, previous, failing)) return false;
+  const previous =
+    payload.repair_failing ??
+    (payload.repair?.unsupported_claims
+      ? payload.repair.unsupported_claims.length +
+        (payload.repair.issues?.length || 0)
+      : undefined);
+  if (!canRepairAgain(payload.repair_attempts ?? 0, previous, failing))
+    return false;
   payload.repair_attempts = (payload.repair_attempts ?? 0) + 1;
   payload.repair_failing = failing;
-  const targets = w.languages.filter((l) => report.claims?.some((c: any) => c.lang === l) || !payload.quality.languages?.[l]?.passed);
+  const targets = w.languages.filter(
+    (l) =>
+      report.claims?.some((c: any) => c.lang === l) ||
+      !payload.quality.languages?.[l]?.passed,
+  );
   payload.repair = {
-    factual: report.passed, reason: report.reason, target_languages: targets.length ? targets : w.languages,
-    unsupported_claims: (report.claims || []).map((c: any) => ({...c, evidence: payload.research.briefs[c.lang]?.sources?.filter((source: any) => source.url === c.source_url)})),
-    issues, research_unsupported: Object.values(payload.research.briefs).flatMap((b: any) => b.unsupported || []),
-    instruction: "Correct listed contradicted or unsupported statements everywhere including introduction, tables and FAQ. Use only the exact supplied evidence. Distinguish weekdays from weekends and holidays, and 24:00 midnight from 25:00 next-day 01:00. Delete claims without evidence. Never invent facts. Keep two distinct exact research source URLs visible. Independently write each target language and preserve unaffected languages.",
+    factual: report.passed,
+    reason: report.reason,
+    target_languages: targets.length ? targets : w.languages,
+    unsupported_claims: (report.claims || []).map((c: any) => ({
+      ...c,
+      evidence: payload.research.briefs[c.lang]?.sources?.filter(
+        (source: any) => source.url === c.source_url,
+      ),
+    })),
+    issues,
+    research_unsupported: Object.values(payload.research.briefs).flatMap(
+      (b: any) => b.unsupported || [],
+    ),
+    instruction:
+      "Correct listed contradicted or unsupported statements everywhere including introduction, tables and FAQ. Use only the exact supplied evidence. Distinguish weekdays from weekends and holidays, and 24:00 midnight from 25:00 next-day 01:00. Delete claims without evidence. Never invent facts. Keep two distinct exact research source URLs visible. Independently write each target language and preserve unaffected languages.",
   };
   return true;
 }
 export async function recoverWorkflows(env: Env, now = Date.now()) {
-  const tasks = await env.WORKBOARD_DB.prepare("SELECT job_id,site_id,stage,status,error,payload_json FROM agent_workflows WHERE status IN ('failed','budget_wait') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted')) ORDER BY updated_at LIMIT 100").all<{job_id:string;site_id:string;stage:string;status:string;error:string;payload_json:string}>();
+  const tasks = await env.WORKBOARD_DB.prepare(
+    "SELECT job_id,site_id,stage,status,error,payload_json FROM agent_workflows WHERE status IN ('failed','budget_wait') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted')) ORDER BY updated_at LIMIT 100",
+  ).all<{
+    job_id: string;
+    site_id: string;
+    stage: string;
+    status: string;
+    error: string;
+    payload_json: string;
+  }>();
   const budgets = new Map<string, Awaited<ReturnType<typeof budgetSettings>>>();
   for (const task of tasks.results) {
-    if (task.status === "budget_wait" && !budgets.has(task.site_id)) budgets.set(task.site_id,await budgetSettings(env,task.site_id));
+    if (task.status === "budget_wait" && !budgets.has(task.site_id))
+      budgets.set(task.site_id, await budgetSettings(env, task.site_id));
     const settings = budgets.get(task.site_id);
     const payload = JSON.parse(task.payload_json);
-    let stage = task.stage, resume = false;
-    if (stage === "verifier" && planRepair(payload, await workspace(env, task.site_id))) {
-      stage = "writer";
+    let stage = task.stage,
+      resume = false;
+    if (
+      (stage === "verifier" ||
+        (stage === "publisher" && task.error?.includes("상위 검토 승인"))) &&
+      payload.input &&
+      payload.research?.briefs &&
+      (payload.supervisor_rounds || 0) < MAX_SUPERVISOR_ROUNDS
+    ) {
+      stage = "supervisor";
       if (task.status === "budget_wait") {
-        await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET stage='writer',payload_json=? WHERE job_id=? AND status='budget_wait' AND stage='verifier'").bind(JSON.stringify(payload),task.job_id).run();
+        await env.WORKBOARD_DB.prepare(
+          "UPDATE agent_workflows SET stage='supervisor',payload_json=? WHERE job_id=? AND status='budget_wait' AND stage='verifier'",
+        )
+          .bind(JSON.stringify(payload), task.job_id)
+          .run();
       } else resume = true;
     }
-    if (task.status === "budget_wait") resume = Date.parse(payload.recovery?.retry_at) <= now || (settings !== undefined && settings.revision > (payload.recovery?.budget_revision ?? 1));
-    else if (task.error?.includes("예산") && task.error.includes("한도")) resume = true;
-    else if (stage === "writer" && payload.repair?.target_languages && task.error?.includes("실제 언어 오류")) resume = true;
+    if (task.status === "budget_wait")
+      resume =
+        Date.parse(payload.recovery?.retry_at) <= now ||
+        (settings !== undefined &&
+          settings.revision > (payload.recovery?.budget_revision ?? 1));
+    else if (task.error?.includes("예산") && task.error.includes("한도"))
+      resume = true;
+    else if (
+      stage === "writer" &&
+      payload.repair?.target_languages &&
+      task.error?.includes("실제 언어 오류")
+    )
+      resume = true;
     if (!resume) continue;
     delete payload.recovery;
-    const changed = await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET stage=?,status='pending',error=NULL,payload_json=?,updated_at=? WHERE job_id=? AND status=?")
-      .bind(stage, JSON.stringify(payload), new Date(now).toISOString(), task.job_id, task.status).run();
-    if (changed.meta.changes) await env.WORKBOARD_DB.prepare("UPDATE content_jobs SET status='agent_pending',error=NULL,updated_at=? WHERE id=? AND status NOT IN ('cancelled','published','drafted')").bind(new Date(now).toISOString(),task.job_id).run();
+    const changed = await env.WORKBOARD_DB.prepare(
+      "UPDATE agent_workflows SET stage=?,status='pending',error=NULL,payload_json=?,updated_at=? WHERE job_id=? AND status=?",
+    )
+      .bind(
+        stage,
+        JSON.stringify(payload),
+        new Date(now).toISOString(),
+        task.job_id,
+        task.status,
+      )
+      .run();
+    if (changed.meta.changes)
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE content_jobs SET status='agent_pending',error=NULL,updated_at=? WHERE id=? AND status NOT IN ('cancelled','published','drafted')",
+      )
+        .bind(new Date(now).toISOString(), task.job_id)
+        .run();
   }
 }
 
@@ -186,6 +263,8 @@ export async function advanceHarness(env: Env) {
           writer: "generating",
           photo_editor: "agent_pending",
           verifier: "verifying",
+          supervisor: "supervising",
+          editor: "editing",
           publisher: "publishing",
         } as Record<string, string>
       )[task.stage] || "agent_pending",
@@ -231,7 +310,11 @@ export async function advanceHarness(env: Env) {
     }
     if (task.stage === "photo_editor") {
       if (
-        w.languages.some((l) => !payload.input.translations[l].images?.length)
+        w.languages.some(
+          (l) =>
+            (payload.input.translations[l].images?.length || 0) <
+            Math.max(2, w.strategy.required_images),
+        )
       )
         payload.input.translations = await illustrate(
           env,
@@ -313,22 +396,62 @@ export async function advanceHarness(env: Env) {
         factual: report.passed,
         verification: report,
       };
-      const issues = Object.values(scores).flatMap((q) => q.issues);
-      if (!report.passed || !Object.values(scores).every((q) => q.passed)) {
-        if (planRepair(payload, w)) {
-          repairNext = "writer";
-        } else
-          throw new HttpError(
-            409,
-            `출처·SEO·AEO·GEO 검증을 통과하지 못했습니다. ${[
-              report.passed ? "" : report.reason,
-              issues.length ? "구조 문제: " + issues.join(" ") : "",
-            ]
-              .filter(Boolean)
-              .join(" ")
-              .slice(0, 400)} 결과를 검토하세요.`.replace(/\s+/g, " "),
-          );
-      }
+      repairNext = "supervisor";
+    }
+    if (task.stage === "editor") {
+      await editUnderSupervision(env, w, payload);
+      repairNext = "photo_editor";
+    }
+    if (task.stage === "supervisor") {
+      for (const lang of w.languages)
+        payload.input.translations[lang] = prepareForReview(
+          payload.input.translations[lang],
+          payload.research.briefs[lang],
+          lang,
+        );
+      const decision = await supervise(env, w, payload);
+      payload.supervisor_rounds = decision.round;
+      payload.supervision = [...(payload.supervision || []), decision];
+      if (decision.action === "approve") {
+        payload.quality = {
+          languages: Object.fromEntries(
+            w.languages.map((l) => [
+              l,
+              quality(payload.input.translations[l], w, l),
+            ]),
+          ),
+          factual: true,
+          verification: {
+            passed: true,
+            reason: decision.reason,
+            verified: decision.claims.length,
+            claims: [],
+          },
+        };
+        payload.supervisor_approval = await articleFingerprint(payload.input);
+        repairNext = "publisher";
+      } else if (
+        decision.action === "edit" &&
+        decision.round < MAX_SUPERVISOR_ROUNDS
+      )
+        repairNext = "editor";
+      else if (
+        decision.action === "research" &&
+        decision.round < MAX_SUPERVISOR_ROUNDS &&
+        !(payload.supervisor_researches >= 1)
+      ) {
+        payload.supervisor_researches =
+          (payload.supervisor_researches || 0) + 1;
+        payload.repair = {
+          target_languages: decision.target_languages,
+          instruction: decision.instructions,
+        };
+        repairNext = "researcher";
+      } else
+        throw new HttpError(
+          409,
+          `상위 검토: ${decision.reason} ${decision.round >= MAX_SUPERVISOR_ROUNDS ? "자동 보완 한도에 도달했습니다." : "추가 근거 또는 연결 설정이 필요합니다."}`,
+        );
     }
     if (task.stage === "publisher") {
       validateDraft(payload.input, w);
@@ -340,6 +463,14 @@ export async function advanceHarness(env: Env) {
         throw new HttpError(
           409,
           "발행 직전 현재 전략의 품질 검증을 통과하지 못했습니다.",
+        );
+      if (
+        payload.supervisor_approval !==
+        (await articleFingerprint(payload.input))
+      )
+        throw new HttpError(
+          409,
+          "현재 글에 대한 상위 검토 승인이 없어 전송하지 않았습니다.",
         );
       if (!(await readiness(w, env)).ready)
         throw new HttpError(
@@ -376,6 +507,13 @@ export async function advanceHarness(env: Env) {
           next: next || null,
           images: payload.input?.translations[w.languages[0]]?.images?.length,
           quality: payload.quality,
+          supervision:
+            task.stage === "supervisor"
+              ? payload.supervision?.at(-1)
+              : undefined,
+          model: ["supervisor", "editor"].includes(task.stage)
+            ? SUPERVISOR_MODEL
+            : undefined,
         }),
         new Date().toISOString(),
         step,
@@ -386,7 +524,15 @@ export async function advanceHarness(env: Env) {
         env,
         task.job_id,
         payload,
-        next ? (next === "writer" ? "generating" : "agent_pending") : "drafted",
+        next
+          ? (
+              {
+                writer: "generating",
+                supervisor: "supervising",
+                editor: "editing",
+              } as Record<string, string>
+            )[next] || "agent_pending"
+          : "drafted",
       );
     if (!next)
       await env.WORKBOARD_DB.prepare(
@@ -422,14 +568,41 @@ export async function advanceHarness(env: Env) {
       };
     }
     if (e instanceof BudgetWait) {
-      payload.recovery = { scope: e.scope, retry_at: e.retryAt, budget_revision: e.revision };
+      payload.recovery = {
+        scope: e.scope,
+        retry_at: e.retryAt,
+        budget_revision: e.revision,
+      };
       const error = `${e.message} 한도 갱신 후 자동 재개합니다.`;
-      await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET status='budget_wait',payload_json=?,error=?,lease_until=NULL,updated_at=? WHERE job_id=?")
-        .bind(JSON.stringify(payload),error,new Date().toISOString(),task.job_id).run();
-      await env.WORKBOARD_DB.prepare("UPDATE agent_steps SET status='waiting',error=?,finished_at=? WHERE id=?").bind(error,new Date().toISOString(),step).run();
-      if (payload.input) await saveProgress(env,task.job_id,payload,"budget_wait");
-      await env.WORKBOARD_DB.prepare("UPDATE content_jobs SET status='budget_wait',error=?,updated_at=? WHERE id=?").bind(error,new Date().toISOString(),task.job_id).run();
-      return {worked:true,job_id:task.job_id,agent:task.stage,blocked:true,retry_at:e.retryAt};
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE agent_workflows SET status='budget_wait',payload_json=?,error=?,lease_until=NULL,updated_at=? WHERE job_id=?",
+      )
+        .bind(
+          JSON.stringify(payload),
+          error,
+          new Date().toISOString(),
+          task.job_id,
+        )
+        .run();
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE agent_steps SET status='waiting',error=?,finished_at=? WHERE id=?",
+      )
+        .bind(error, new Date().toISOString(), step)
+        .run();
+      if (payload.input)
+        await saveProgress(env, task.job_id, payload, "budget_wait");
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE content_jobs SET status='budget_wait',error=?,updated_at=? WHERE id=?",
+      )
+        .bind(error, new Date().toISOString(), task.job_id)
+        .run();
+      return {
+        worked: true,
+        job_id: task.job_id,
+        agent: task.stage,
+        blocked: true,
+        retry_at: e.retryAt,
+      };
     }
     const error = e instanceof Error ? e.message : "에이전트 실행 실패";
     await env.WORKBOARD_DB.prepare(

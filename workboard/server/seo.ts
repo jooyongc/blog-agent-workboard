@@ -38,12 +38,12 @@ export function quality(article: Article, w: Workspace, lang: string): Quality {
   const quick =
     md
       .match(
-        /^##\s+(?:Quick Answer|クイックアンサー|要点|即答)\s*\n([\s\S]*?)(?=\n## |$)/im,
+        /^##\s+(?:Quick Answer|クイックアンサー|簡易回答|要点|即答)\s*\n([\s\S]*?)(?=\n## |$)/im,
       )?.[1]
       ?.trim() ?? "";
   const main = headings.filter(
     (h) =>
-      !/(Quick Answer|Frequently Asked|FAQ|よくある|要点|即答|Sources|References)/i.test(
+      !/(Quick Answer|Frequently Asked|FAQ|よくある|簡易回答|要点|即答|Sources|References)/i.test(
         h,
       ),
   );

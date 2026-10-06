@@ -237,18 +237,47 @@ export function insertStockPhotos(
   photos: StockPhoto[],
 ): Article {
   const existing = article.images ?? [];
-  if (existing.length >= 2) return article;
+  if (
+    existing.length >= photos.length &&
+    existing.every((photo) => article.content_md.includes(photo.url))
+  )
+    return article;
+  const selected = [
+    ...new Map(
+      [...existing, ...photos].map((photo) => [photo.url, photo]),
+    ).values(),
+  ].slice(0, Math.max(existing.length, photos.length));
+  const missing = selected.filter(
+    (photo) => !article.content_md.includes(photo.url),
+  );
   const clean = (s: string) => s.replace(/[\[\]\n]/g, " ");
   const blocks = article.content_md.split(/(?=^## )/m);
-  photos.forEach((photo, i) => {
-    const target = Math.min(
-      blocks.length - 1,
-      Math.max(0, Math.floor(((i + 1) * blocks.length) / (photos.length + 1))),
-    );
+  let eligible = blocks
+    .map((block, index) => ({ block, index }))
+    .filter(
+      ({ block }) =>
+        /^## /m.test(block) &&
+        !/^## (?:Quick Answer|クイックアンサー|簡易回答|要点|即答|Frequently Asked|FAQ|よくある|Sources|References)/i.test(
+          block.trim(),
+        ),
+    )
+    .map((x) => x.index);
+  if (!eligible.length) {
+    blocks.push("\n\n## Gallery\n");
+    eligible = [blocks.length - 1];
+  }
+  missing.forEach((photo, i) => {
+    const target =
+      eligible[
+        Math.min(
+          eligible.length - 1,
+          Math.floor((i * eligible.length) / missing.length),
+        )
+      ];
     blocks[target] +=
       `\n\n![${clean(photo.alt)}](${photo.url})\n\n${photo.provider === "Adobe Firefly" ? "*AI-generated with Adobe Firefly. Not documentary evidence.*" : `*Photo: [${clean(photo.photographer)} / ${photo.provider}](${photo.page}). Context illustration.*`}\n\n`;
   });
-  return { ...article, content_md: blocks.join(""), images: photos };
+  return { ...article, content_md: blocks.join(""), images: selected };
 }
 export async function illustrate(
   env: Env,

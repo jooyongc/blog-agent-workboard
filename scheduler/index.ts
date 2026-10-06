@@ -65,7 +65,7 @@ export default {
       service: "blog-agent-workboard-scheduler",
       status: "ok",
       transport: "Cloudflare Queues",
-      agents: ["researcher", "writer", "photo_editor", "verifier", "publisher"],
+      agents: ["researcher", "writer", "photo_editor", "verifier", "supervisor", "editor", "publisher"],
     });
   },
 };

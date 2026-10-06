@@ -1823,7 +1823,7 @@ function Topics() {
 }
 function Flow() {
   const { active } = useStore();
-  return <AutomationFlow active={active} />;
+  return <AutomationFlow key={active.site_id} active={active} />;
 }
 function Reports() {
   const { active } = useStore();
@@ -1831,6 +1831,7 @@ function Reports() {
     runs: {
       id: string;
       article_key: string;
+      model: string;
       actual: number | null;
       reserved: number;
       status: string;
@@ -2119,8 +2120,9 @@ function Reports() {
             </div>
           )}
           <p className="flow-description">
-            한도에는 완료 비용과 진행·결과 미확인 작업의 예약 비용이 포함됩니다.
-            저장해도 기존 사용량은 초기화되지 않습니다.
+            상위 Sonnet 검토·보완 비용도 같은 글의 한도에 포함됩니다. 한도에는
+            완료 비용과 진행·결과 미확인 작업의 예약 비용이 포함됩니다. 저장해도
+            기존 사용량은 초기화되지 않습니다.
           </p>
           {error && <Notice>{error}</Notice>}
           {savedNotice && (
@@ -2147,6 +2149,7 @@ function Reports() {
                 <tr>
                   <th>작업</th>
                   <th>상태</th>
+                  <th>모델</th>
                   <th>비용</th>
                   <th>작성일</th>
                 </tr>
@@ -2167,6 +2170,11 @@ function Reports() {
                           failed: "실패",
                         }[r.status] ?? r.status}
                       </span>
+                    </td>
+                    <td>
+                      {r.model === "claude-sonnet-5-5"
+                        ? "Sonnet 5.5"
+                        : "Haiku 4.5"}
                     </td>
                     <td>${(r.actual ?? r.reserved).toFixed(4)}</td>
                     <td>

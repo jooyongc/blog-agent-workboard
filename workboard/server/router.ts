@@ -25,6 +25,7 @@ import { oauthStart, oauthCallback } from "./oauth";
 import { mediaResponse, stockPhotos } from "./media";
 import { advanceHarness, enqueueApproved } from "./harness";
 import { measure } from "./measurement";
+import { SUPERVISOR_MODEL, MAX_SUPERVISOR_ROUNDS } from "./supervisor";
 import { fireflyReady } from "./firefly";
 import { budgetSettings, saveBudgetSettings, budgetUsage, budgetExamples } from "./budget";
 import { budgetReset } from "./model";
@@ -487,6 +488,7 @@ export async function onRequest({
         .all();
       return json({
         workspace: w,
+        orchestration: {runtime:"Cloudflare Queues",supervisor_model:SUPERVISOR_MODEL,worker_model:"claude-haiku-4-5",max_review_rounds:MAX_SUPERVISOR_ROUNDS,background:true},
         connection: await readiness(w, env),
         media: {
           pexels: !!env.PEXELS_API_KEY,
@@ -498,7 +500,7 @@ export async function onRequest({
         runs: r.results,
         workflows: (
           await env.WORKBOARD_DB.prepare(
-            "SELECT job_id,topic_id,stage,status,error,json_extract(payload_json,'$.recovery') AS recovery_json FROM agent_workflows WHERE site_id=? ORDER BY created_at DESC LIMIT 100",
+            "SELECT job_id,topic_id,stage,status,error,json_extract(payload_json,'$.recovery') AS recovery_json,json_extract(payload_json,'$.supervision') AS supervision_json,json_extract(payload_json,'$.supervisor_rounds') AS supervisor_rounds FROM agent_workflows WHERE site_id=? ORDER BY created_at DESC LIMIT 100",
           )
             .bind(id)
             .all()
