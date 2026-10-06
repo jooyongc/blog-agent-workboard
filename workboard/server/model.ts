@@ -46,7 +46,7 @@ export async function modelJson(
   } catch (error) {
     const detail = String(error);
     if (detail.includes("budget")) {
-      const settings = await budgetSettings(env);
+      const settings = await budgetSettings(env, key.split("/")[0]);
       const scope = detail.includes("monthly_budget") ? "monthly" : detail.includes("weekly_budget") ? "weekly" : "article";
       const label = scope === "monthly" ? "월간" : scope === "weekly" ? "주간" : "이 글의";
       throw new BudgetWait(scope, budgetReset(scope, now), `${label} AI 예산 $${settings[scope].toFixed(2)} 한도에 도달했습니다.`, settings.revision);

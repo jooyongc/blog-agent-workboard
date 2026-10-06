@@ -177,7 +177,7 @@ export function App() {
           <Route path="/workspaces" element={<Workspaces />} />
           <Route path="/flow" element={<Flow />} />
           <Route path="/automation" element={<Navigate to="/flow" replace />} />
-          <Route path="/reports" element={<Reports />} />
+          <Route path="/reports" element={<Reports key={active.site_id} />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/queue" element={<Navigate to="/content" replace />} />
           <Route path="/pipeline" element={<Navigate to="/flow" replace />} />
@@ -1826,6 +1826,7 @@ function Flow() {
   return <AutomationFlow active={active} />;
 }
 function Reports() {
+  const { active } = useStore();
   const [data, setData] = useState<{
     runs: {
       id: string;
@@ -1837,26 +1838,72 @@ function Reports() {
     }[];
     budget: { reserved: number; actual: number };
     month: string;
-    limits: {monthly:number;weekly:number;article:number;revision:number;updated_at:string};
-    weekly: {reserved:number;actual:number};
-    resets: {weekly:string;monthly:string};
+    limits: {
+      site_id: string;
+      monthly: number;
+      weekly: number;
+      article: number;
+      revision: number;
+      updated_at: string;
+    };
+    examples: {
+      title: string;
+      status: string;
+      calls: number;
+      actual: number;
+      reserved: number;
+    }[];
+    weekly: { reserved: number; actual: number };
+    resets: { weekly: string; monthly: string };
   } | null>(null);
   const [error, setError] = useState("");
-  const [limits, setLimits] = useState({monthly:"",weekly:"",article:""});
+  const [limits, setLimits] = useState({
+    monthly: "",
+    weekly: "",
+    article: "",
+  });
   const [saving, setSaving] = useState(false);
   const [savedNotice, setSavedNotice] = useState("");
   useEffect(() => {
-    api<NonNullable<typeof data>>("reports")
-      .then(result => {setData(result);setLimits({monthly:String(result.limits.monthly),weekly:String(result.limits.weekly),article:String(result.limits.article)});})
+    api<NonNullable<typeof data>>(
+      `reports?site_id=${encodeURIComponent(active.site_id)}`,
+    )
+      .then((result) => {
+        setData(result);
+        setLimits({
+          monthly: String(result.limits.monthly),
+          weekly: String(result.limits.weekly),
+          article: String(result.limits.article),
+        });
+      })
       .catch((e) => setError(e.message));
   }, []);
   async function saveBudget(e: FormEvent) {
-    e.preventDefault();setSaving(true);setError("");setSavedNotice("");
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    setSavedNotice("");
     try {
-      const result = await api<NonNullable<typeof data>["limits"]>("budget", {method:"PUT",body:JSON.stringify({monthly:Number(limits.monthly),weekly:Number(limits.weekly),article:Number(limits.article)})});
-      setData(previous => previous ? {...previous,limits:result} : previous);
-      setSavedNotice("예산 설정을 저장했습니다. 한도가 확보된 대기 작업은 자동 재개합니다.");
-    } catch(e) {setError((e as Error).message);} finally {setSaving(false);}
+      const result = await api<NonNullable<typeof data>["limits"]>("budget", {
+        method: "PUT",
+        body: JSON.stringify({
+          site_id: active.site_id,
+          monthly: Number(limits.monthly),
+          weekly: Number(limits.weekly),
+          article: Number(limits.article),
+        }),
+      });
+      setData((previous) =>
+        previous ? { ...previous, limits: result } : previous,
+      );
+      setSavedNotice(
+        `${active.name} 예산을 저장했습니다. 이 워크스페이스에서 한도가 확보된 대기 작업은 자동 재개합니다.`,
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
   }
   const actual = data?.budget.actual ?? 0;
   const reserve = data?.budget.reserved ?? 0;
@@ -1865,7 +1912,7 @@ function Reports() {
       <Heading
         eyebrow="A CLEAR VIEW OF YOUR WORK"
         title="콘텐츠 운영의 기록."
-        note="Workboard에서 실행한 AI 작성과 예산 사용량을 확인하세요."
+        note={`${active.name}의 AI 작성 이력과 전용 예산을 확인하세요. 워크스페이스를 전환하면 해당 사이트의 설정이 열립니다.`}
       />
       {error && <Notice>{error}</Notice>}
       <div className="studio-metrics">
@@ -1887,7 +1934,7 @@ function Reports() {
           },
           {
             label: "남은 주간 예산",
-            value: `$${Math.max(0,(data?.limits.weekly ?? 0)-(data?.weekly.reserved ?? 0)).toFixed(2)}`,
+            value: `$${Math.max(0, (data?.limits.weekly ?? 0) - (data?.weekly.reserved ?? 0)).toFixed(2)}`,
             note: `주 $${data?.limits.weekly ?? "—"} · 예약된 비용 포함`,
           },
         ].map((m) => (
@@ -1899,26 +1946,191 @@ function Reports() {
         ))}
       </div>
       <section className="studio-panel" id="budget-settings">
-        <div className="panel-heading"><div><h2>AI 예산 설정</h2><p>모든 워크스페이스에 함께 적용되는 USD 한도입니다.</p></div></div>
+        <div className="panel-heading">
+          <div>
+            <h2>{active.name} · AI 예산 설정</h2>
+            <p>
+              이 워크스페이스에만 적용됩니다. 다른 사이트의 한도·사용량과
+              합산하지 않습니다.
+            </p>
+          </div>
+        </div>
         <form className="form-body" onSubmit={saveBudget}>
           <div className="form-row">
-            {([{key:"monthly",label:"월간 한도 (USD)"},{key:"weekly",label:"주간 한도 (USD)"},{key:"article",label:"글당 한도 (USD)"}] as const).map(field =>
-              <label className="field-label" key={field.key}>{field.label}
-                <input type="number" min={0} max={10000} step="0.01" required value={limits[field.key]} disabled={!data || saving} onChange={e => setLimits(previous => ({...previous,[field.key]:e.target.value}))}/>
-              </label>)}
+            {(
+              [
+                { key: "monthly", label: "월간 한도 (USD)" },
+                { key: "weekly", label: "주간 한도 (USD)" },
+                { key: "article", label: "글당 한도 (USD)" },
+              ] as const
+            ).map((field) => (
+              <label className="field-label" key={field.key}>
+                {field.label}
+                <input
+                  type="number"
+                  min={0}
+                  max={10000}
+                  step="0.01"
+                  required
+                  value={limits[field.key]}
+                  disabled={!data || saving}
+                  onChange={(e) =>
+                    setLimits((previous) => ({
+                      ...previous,
+                      [field.key]: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+            ))}
           </div>
-          <p className="flow-description">글당 ≤ 주간 ≤ 월간으로 설정하세요. 글당 한도는 한 달 동안 같은 글의 리서치·집필·수정·검증 비용을 합산하며, 영어·일본어도 함께 계산합니다. 0으로 설정하면 해당 한도의 새 AI 실행을 멈춥니다.</p>
-          {data && <div className="form-row">
-            {([{label:"월간",used:reserve,cap:data.limits.monthly,reset:data.resets.monthly},{label:"주간",used:data.weekly.reserved,cap:data.limits.weekly,reset:data.resets.weekly}]).map(period => <div key={period.label}>
-              <p>{period.label} 사용·예약 ${period.used.toFixed(4)} / ${period.cap.toFixed(2)}</p>
-              <progress aria-label={`${period.label} 예산 사용률`} max={period.cap || 1} value={period.cap ? Math.min(period.used,period.cap) : 0} style={{width:"100%",accentColor:"var(--accent, #52734d)"}}/>
-              <small>갱신: {new Date(period.reset).toLocaleString("ko-KR",{timeZone:"Asia/Seoul"})} KST</small>
-            </div>)}
-          </div>}
-          <p className="flow-description">한도에는 완료 비용과 진행·결과 미확인 작업의 예약 비용이 포함됩니다. 저장해도 기존 사용량은 초기화되지 않습니다.</p>
+          <p className="flow-description">
+            글당 ≤ 주간 ≤ 월간으로 설정하세요. 글당 한도는 한 달 동안 같은 글의
+            리서치·집필·수정·검증 비용을 합산하며, 영어·일본어도 함께
+            계산합니다. 0으로 설정하면 해당 한도의 새 AI 실행을 멈춥니다.
+          </p>
+          <details className="studio-panel" open>
+            <summary>
+              <strong>글당 한도는 얼마로 시작하면 좋을까요?</strong>
+            </summary>
+            <p className="flow-description">
+              한도는 반드시 쓰는 금액이 아니라 작업을 멈추는 상한입니다. 아래는
+              현재 작성 에이전트의 시작 한도 예시이며, 조사량·글 길이·수정
+              횟수에 따라 실제 비용이 달라집니다.
+            </p>
+            <div className="content-table-scroll">
+              <table className="content-table">
+                <thead>
+                  <tr>
+                    <th>작성 상황</th>
+                    <th>시작 한도 예시</th>
+                    <th>포함하는 작업</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>영어 등 단일 언어 일반 글</td>
+                    <td>$0.50</td>
+                    <td>공식 출처 조사 → 집필 → 사진 삽입 → 검증</td>
+                  </tr>
+                  <tr>
+                    <td>영어 + 일본어를 독립적으로 작성</td>
+                    <td>$1.00</td>
+                    <td>
+                      두 언어의 별도 조사·집필·검증을 같은 주제 예산으로 합산
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>비교·가격·규정 등 사실 확인과 재수정이 많은 글</td>
+                    <td>$1.50</td>
+                    <td>추가 조사·자동 수정·재검증까지 여유를 둔 상한</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="flow-description">
+              예: 월 $10으로 격일 약 15개 주제를 처리하려면 주제당 실제 평균
+              비용이 약 $0.67 이하여야 합니다. 글당 $1은 모든 글에 $1을 쓰겠다는
+              뜻이 아닙니다. 월간·주간 한도도 함께 적용됩니다.
+            </p>
+            <p className="flow-description">
+              실제 청구 전에 최대 응답 길이와 검색 비용을 예약하므로, 누적
+              사용액이 글당 한도보다 적어도 다음 단계의 예약 여유가 부족하면
+              대기할 수 있습니다. 반복해서 대기하면 아래 글별 실측과 예약액을
+              보고 조금씩 조정하세요.
+            </p>
+            {data?.examples.length ? (
+              <>
+                <h3>이 워크스페이스의 실제 글별 비용</h3>
+                <p className="flow-description">
+                  이번 달 현재까지의 누적 실측입니다. 작업 중인 글은 최종 비용이
+                  더 늘 수 있습니다. 무료 사진 검색 비용은 AI 글 작성 비용에
+                  포함되지 않습니다.
+                </p>
+                <div className="content-table-scroll">
+                  <table className="content-table">
+                    <thead>
+                      <tr>
+                        <th>주제</th>
+                        <th>현재까지의 AI 비용</th>
+                        <th>사용·예약 합계</th>
+                        <th>AI 호출 수</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.examples.map((sample, index) => (
+                        <tr key={index}>
+                          <td>{sample.title}</td>
+                          <td>${sample.actual.toFixed(4)}</td>
+                          <td>${sample.reserved.toFixed(4)}</td>
+                          <td>{sample.calls}회</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <p className="flow-description">
+                아직 이 워크스페이스의 글별 비용 기록이 없습니다. 첫 작성 후
+                실제 누적 비용이 이곳에 표시됩니다.
+              </p>
+            )}
+          </details>
+          {data && (
+            <div className="form-row">
+              {[
+                {
+                  label: "월간",
+                  used: reserve,
+                  cap: data.limits.monthly,
+                  reset: data.resets.monthly,
+                },
+                {
+                  label: "주간",
+                  used: data.weekly.reserved,
+                  cap: data.limits.weekly,
+                  reset: data.resets.weekly,
+                },
+              ].map((period) => (
+                <div key={period.label}>
+                  <p>
+                    {period.label} 사용·예약 ${period.used.toFixed(4)} / $
+                    {period.cap.toFixed(2)}
+                  </p>
+                  <progress
+                    aria-label={`${period.label} 예산 사용률`}
+                    max={period.cap || 1}
+                    value={period.cap ? Math.min(period.used, period.cap) : 0}
+                    style={{
+                      width: "100%",
+                      accentColor: "var(--accent, #52734d)",
+                    }}
+                  />
+                  <small>
+                    갱신:{" "}
+                    {new Date(period.reset).toLocaleString("ko-KR", {
+                      timeZone: "Asia/Seoul",
+                    })}{" "}
+                    KST
+                  </small>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="flow-description">
+            한도에는 완료 비용과 진행·결과 미확인 작업의 예약 비용이 포함됩니다.
+            저장해도 기존 사용량은 초기화되지 않습니다.
+          </p>
           {error && <Notice>{error}</Notice>}
-          {savedNotice && <div role="status" className="success-notice">{savedNotice}</div>}
-          <button className="button-primary" disabled={!data || saving}>{saving ? "저장 중…" : "예산 설정 저장"}</button>
+          {savedNotice && (
+            <div role="status" className="success-notice">
+              {savedNotice}
+            </div>
+          )}
+          <button className="button-primary" disabled={!data || saving}>
+            {saving ? "저장 중…" : "예산 설정 저장"}
+          </button>
         </form>
       </section>
       <section className="studio-panel">

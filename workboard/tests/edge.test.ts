@@ -63,6 +63,7 @@ function db() {
     "0007_firefly_jobs.sql",
     "0008_media_library.sql",
     "0009_budget_settings.sql",
+    "0010_workspace_budgets.sql",
   ])
     d.exec(
       fs.readFileSync(
@@ -70,6 +71,7 @@ function db() {
         "utf8",
       ),
     );
+  d.exec("UPDATE workspace_budget_settings SET monthly=10,weekly=2,article=0.5,revision=1 WHERE site_id<>'workboard-diagnostic'");
   return {
     sqlite: d,
     binding: {
@@ -427,15 +429,15 @@ test("D1 transaction guard enforces article, week and month caps", () => {
   const insert = sqlite.prepare(
     "INSERT INTO ai_runs(id,article_key,month,week,reserved,status,created_at) VALUES(?,?,?,?,?,?,?)",
   );
-  insert.run("a", "article", "2026-10", "week", 0.4, "running", "date");
+  insert.run("a", "koreabylocal/article", "2026-10", "week", 0.4, "running", "date");
   assert.throws(
-    () => insert.run("b", "article", "2026-10", "week", 0.2, "running", "date"),
+    () => insert.run("b", "koreabylocal/article", "2026-10", "week", 0.2, "running", "date"),
     /article_budget/,
   );
   for (let i = 0; i < 3; i++)
     insert.run(
       "week-" + i,
-      "other-" + i,
+      "koreabylocal/other-" + i,
       "2026-10",
       "week",
       0.5,
@@ -446,7 +448,7 @@ test("D1 transaction guard enforces article, week and month caps", () => {
     () =>
       insert.run(
         "week-over",
-        "other-last",
+        "koreabylocal/other-last",
         "2026-10",
         "week",
         0.2,
@@ -458,7 +460,7 @@ test("D1 transaction guard enforces article, week and month caps", () => {
   for (let i = 0; i < 16; i++)
     insert.run(
       "month-" + i,
-      "m-" + i,
+      "koreabylocal/m-" + i,
       "2026-10",
       "other-week-" + i,
       0.5,
@@ -469,7 +471,7 @@ test("D1 transaction guard enforces article, week and month caps", () => {
     () =>
       insert.run(
         "month-over",
-        "fresh",
+        "koreabylocal/fresh",
         "2026-10",
         "fresh-week",
         0.2,
@@ -1112,10 +1114,10 @@ test("confirmed rejected model requests release reservations without inventing p
   globalThis.fetch = async () =>
     Response.json({ error: "bad request" }, { status: 400 });
   try {
-    await assert.rejects(modelJson(env, "test-budget", "system", {}));
+    await assert.rejects(modelJson(env, "koreabylocal/test-budget", "system", {}));
     const row = d.sqlite
       .prepare(
-        "SELECT reserved,actual,status FROM ai_runs WHERE article_key='test-budget'",
+        "SELECT reserved,actual,status FROM ai_runs WHERE article_key='koreabylocal/test-budget'",
       )
       .get();
     assert.equal(row?.reserved, 0);
@@ -1316,7 +1318,7 @@ test("budget reset matches the enforced Korean week and month boundaries", () =>
 test("budget-blocked research waits without a model call then automatically resumes its checkpoint", async () => {
   const {d,env}=environment();env.ANTHROPIC_API_KEY="test-key";
   const now=Date.now(), month=new Date(now+9*3600000).toISOString().slice(0,7), week=String(Math.floor((now+9*3600000-4*86400000)/(7*86400000)));
-  for(let i=0;i<5;i++) d.sqlite.prepare("INSERT INTO ai_runs(id,article_key,month,week,reserved,status,created_at) VALUES(?,?,?,?,0.398,'complete',?)").run("budget"+i,"other"+i,month,week,new Date(now).toISOString());
+  for(let i=0;i<5;i++) d.sqlite.prepare("INSERT INTO ai_runs(id,article_key,month,week,reserved,status,created_at) VALUES(?,?,?,?,0.398,'complete',?)").run("budget"+i,"koreabylocal/other"+i,month,week,new Date(now).toISOString());
   d.sqlite.prepare("INSERT INTO topic_ideas(id,site_id,title,category,status,created_at) VALUES('recover-budget','koreabylocal','Korean greetings','culture','approved',?)").run(new Date(now).toISOString());
   const original=globalThis.fetch;let calls=0;globalThis.fetch=(async()=>{calls++;throw Error("Must not call paid model");}) as typeof fetch;
   try {
@@ -1349,10 +1351,10 @@ test("known factual errors are prepared for rewrite while the budget wait remain
 
 test("budget settings require login and reject invalid limits without changing the guard", async () => {
   const {d,env}=environment();
-  assert.equal((await request("budget",env,{method:"PUT",body:JSON.stringify({monthly:20,weekly:3,article:1})},false)).status,401);
+  assert.equal((await request("budget",env,{method:"PUT",body:JSON.stringify({site_id:"koreabylocal",monthly:20,weekly:3,article:1})},false)).status,401);
   for(const input of [{monthly:10,weekly:11,article:0.5},{monthly:10,weekly:2,article:3},{monthly:-1,weekly:2,article:0.5},{monthly:10,weekly:2.001,article:0.5},{monthly:10,weekly:"3",article:0.5}])
-    assert.equal((await request("budget",env,{method:"PUT",body:JSON.stringify(input)})).status,400);
-  const settings=d.sqlite.prepare("SELECT monthly,weekly,article,revision FROM budget_settings").get() as any;
+    assert.equal((await request("budget",env,{method:"PUT",body:JSON.stringify({...input,site_id:"koreabylocal"})})).status,400);
+  const settings=d.sqlite.prepare("SELECT monthly,weekly,article,revision FROM workspace_budget_settings WHERE site_id='koreabylocal'").get() as any;
   assert.deepEqual({...settings},{monthly:10,weekly:2,article:0.5,revision:1});
 });
 
@@ -1360,12 +1362,12 @@ test("saved budgets drive the DB spending guard and unchanged saves do not reset
   const {d,env}=environment();
   const period={month:"2026-10",week:"2961"};
   const insert=d.sqlite.prepare("INSERT INTO ai_runs(id,article_key,month,week,reserved,status,created_at) VALUES(?,?,?,?,?,'complete','now')");
-  assert.throws(()=>insert.run("too-high","one",period.month,period.week,0.7),/article_budget/);
-  const response=await request("budget",env,{method:"PUT",body:JSON.stringify({monthly:20,weekly:3,article:1})});
+  assert.throws(()=>insert.run("too-high","koreabylocal/one",period.month,period.week,0.7),/article_budget/);
+  const response=await request("budget",env,{method:"PUT",body:JSON.stringify({site_id:"koreabylocal",monthly:20,weekly:3,article:1})});
   assert.equal(response.status,200);assert.equal((await response.json() as any).revision,2);
-  insert.run("allowed","one",period.month,period.week,0.7);
-  assert.throws(()=>insert.run("blocked","one",period.month,period.week,0.4),/article_budget/);
-  const same=await request("budget",env,{method:"PUT",body:JSON.stringify({monthly:20,weekly:3,article:1})});
+  insert.run("allowed","koreabylocal/one",period.month,period.week,0.7);
+  assert.throws(()=>insert.run("blocked","koreabylocal/one",period.month,period.week,0.4),/article_budget/);
+  const same=await request("budget",env,{method:"PUT",body:JSON.stringify({site_id:"koreabylocal",monthly:20,weekly:3,article:1})});
   assert.equal((await same.json() as any).revision,2);
   assert.equal((d.sqlite.prepare("SELECT SUM(reserved) AS used FROM ai_runs").get() as any).used,0.7);
 });
@@ -1377,8 +1379,54 @@ test("a budget increase resumes waiting jobs before the calendar reset without e
   d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES('increased-budget','topic','koreabylocal','researcher','budget_wait',?,'now','now')").run(JSON.stringify(payload));
   await recoverWorkflows(env,Date.parse("2026-10-06T01:00:00Z"));
   assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows").get() as any).status,"budget_wait");
-  await request("budget",env,{method:"PUT",body:JSON.stringify({monthly:10,weekly:3,article:0.5})});
+  await request("budget",env,{method:"PUT",body:JSON.stringify({site_id:"koreabylocal",monthly:10,weekly:3,article:0.5})});
   await recoverWorkflows(env,Date.parse("2026-10-06T01:00:01Z"));
   const result=d.sqlite.prepare("SELECT status,stage,payload_json FROM agent_workflows").get() as any;
   assert.equal(result.status,"pending");assert.equal(result.stage,"researcher");assert.equal(JSON.parse(result.payload_json).recovery,undefined);
+});
+
+test("workspace budgets isolate spending guards, reports and saves", async () => {
+  const {d,env}=environment();
+  const now=Date.now(),month=new Date(now+9*3600000).toISOString().slice(0,7),week=String(Math.floor((now+9*3600000-4*86400000)/(7*86400000)));
+  const insert=d.sqlite.prepare("INSERT INTO ai_runs(id,article_key,month,week,reserved,actual,status,created_at) VALUES(?,?,?,?,?,?,'complete',?)");
+  for(let i=0;i<4;i++) insert.run("local"+i,"koreabylocal/topic-"+i,month,week,0.5,0.5,new Date(now).toISOString());
+  assert.throws(()=>insert.run("local-over","koreabylocal/fresh",month,week,0.1,0.1,"now"),/weekly_budget/);
+  insert.run("decode","koreadecode/fresh",month,week,0.4,0.3,new Date(now).toISOString());
+  const local=await (await request("reports?site_id=koreabylocal",env)).json() as any;
+  const decode=await (await request("reports?site_id=koreadecode",env)).json() as any;
+  assert.equal(local.budget.reserved,2);assert.equal(local.weekly.reserved,2);
+  assert.equal(decode.budget.reserved,0.4);assert.equal(decode.budget.actual,0.3);
+  assert.equal(decode.runs.length,1);assert.equal(decode.limits.site_id,"koreadecode");
+  await request("budget",env,{method:"PUT",body:JSON.stringify({site_id:"koreabylocal",monthly:20,weekly:3,article:1})});
+  const unchanged=await (await request("reports?site_id=koreadecode",env)).json() as any;
+  assert.equal(unchanged.limits.monthly,10);assert.equal(unchanged.limits.weekly,2);assert.equal(unchanged.limits.revision,1);
+  assert.equal((await request("reports?site_id=unknown",env)).status,404);
+  assert.equal((await request("budget",env,{method:"PUT",body:JSON.stringify({monthly:10,weekly:2,article:0.5})})).status,400);
+});
+
+test("new workspaces start with zero budgets and similarly named sites cannot consume each other's allowance", async () => {
+  const {d,env}=environment();
+  const w=structuredClone(CATALOG[2]);w.site_id="koreabylocal-extra";w.schedule.enabled=false;
+  assert.equal((await request("workspaces",env,{method:"POST",body:JSON.stringify(w)})).status,201);
+  const created=await (await request("reports?site_id=koreabylocal-extra",env)).json() as any;
+  assert.equal(created.limits.monthly,0);assert.equal(created.limits.weekly,0);assert.equal(created.limits.article,0);
+  const insert=d.sqlite.prepare("INSERT INTO ai_runs(id,article_key,month,week,reserved,status,created_at) VALUES(?,?,?,?,?,'running','now')");
+  assert.throws(()=>insert.run("paused","koreabylocal-extra/topic","2026-10","week",0.01),/monthly_budget/);
+  assert.throws(()=>insert.run("unknown","missing/topic","2026-10","week",0.01),/workspace_budget_missing/);
+  await request("budget",env,{method:"PUT",body:JSON.stringify({site_id:w.site_id,monthly:10,weekly:2,article:0.5})});
+  insert.run("extra","koreabylocal-extra/topic","2026-10","week",0.4);
+  insert.run("local","koreabylocal/topic","2026-10","week",0.4);
+  assert.throws(()=>insert.run("extra-over","koreabylocal-extra/topic","2026-10","week",0.2),/article_budget/);
+});
+
+test("changing a workspace budget resumes only its own waiting agents", async () => {
+  const {d,env}=environment();
+  for(const site of ["koreabylocal","koreadecode"]) {
+    d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES(?,?,?,'Topic','culture','{}','budget_wait','now','now')").run(site,site,site);
+    d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES(?,?,?,'researcher','budget_wait',?,'now','now')").run(site,site,site,JSON.stringify({recovery:{retry_at:"2026-10-11T15:00:00Z",budget_revision:1}}));
+  }
+  await request("budget",env,{method:"PUT",body:JSON.stringify({site_id:"koreabylocal",monthly:10,weekly:3,article:0.5})});
+  await recoverWorkflows(env,Date.parse("2026-10-06T01:00:00Z"));
+  assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows WHERE site_id='koreabylocal'").get() as any).status,"pending");
+  assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows WHERE site_id='koreadecode'").get() as any).status,"budget_wait");
 });

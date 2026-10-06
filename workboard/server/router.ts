@@ -26,7 +26,7 @@ import { mediaResponse, stockPhotos } from "./media";
 import { advanceHarness, enqueueApproved } from "./harness";
 import { measure } from "./measurement";
 import { fireflyReady } from "./firefly";
-import { budgetSettings, saveBudgetSettings, budgetUsage } from "./budget";
+import { budgetSettings, saveBudgetSettings, budgetUsage, budgetExamples } from "./budget";
 import { budgetReset } from "./model";
 export async function onRequest({
   request,
@@ -635,12 +635,16 @@ export async function onRequest({
         blogger_owner: "cloudflare",
       });
     if (route === "reports" && method === "GET") {
-      const runs = await env.WORKBOARD_DB.prepare("SELECT * FROM ai_runs ORDER BY created_at DESC LIMIT 100").all();
-      const usage = await budgetUsage(env);
-      return json({runs:runs.results,budget:usage.monthly,month:usage.month,limits:await budgetSettings(env),weekly:usage.weekly,resets:{weekly:budgetReset("weekly"),monthly:budgetReset("monthly")}});
+      const w = await workspace(env, url.searchParams.get("site_id") || active());
+      const runs = await env.WORKBOARD_DB.prepare("SELECT * FROM ai_runs WHERE substr(article_key,1,instr(article_key,'/')-1)=? ORDER BY created_at DESC LIMIT 100").bind(w.site_id).all();
+      const usage = await budgetUsage(env,w.site_id);
+      return json({site_id:w.site_id,workspace_name:w.name,runs:runs.results,budget:usage.monthly,month:usage.month,limits:await budgetSettings(env,w.site_id),weekly:usage.weekly,examples:await budgetExamples(env,w.site_id),resets:{weekly:budgetReset("weekly"),monthly:budgetReset("monthly")}});
     }
     if (route === "budget" && method === "PUT") {
-      const settings = await saveBudgetSettings(env, await body<unknown>(request));
+      const input = await body<{site_id:string}>(request);
+      if (typeof input?.site_id !== "string" || !input.site_id) throw new HttpError(400,"예산을 설정할 워크스페이스를 선택하세요.");
+      const w = await workspace(env,input.site_id);
+      const settings = await saveBudgetSettings(env,w.site_id,input);
       wakeHarness(env, waitUntil);
       return json(settings);
     }
