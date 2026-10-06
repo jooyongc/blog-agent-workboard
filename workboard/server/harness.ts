@@ -61,9 +61,14 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
   for (const task of tasks.results) {
     const payload = JSON.parse(task.payload_json);
     let stage = task.stage, resume = false;
+    if (stage === "verifier" && planRepair(payload, await workspace(env, task.site_id))) {
+      stage = "writer";
+      if (task.status === "budget_wait") {
+        await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET stage='writer',payload_json=? WHERE job_id=? AND status='budget_wait' AND stage='verifier'").bind(JSON.stringify(payload),task.job_id).run();
+      } else resume = true;
+    }
     if (task.status === "budget_wait") resume = Date.parse(payload.recovery?.retry_at) <= now;
     else if (task.error?.includes("예산") && task.error.includes("한도")) resume = true;
-    else if (stage === "verifier" && planRepair(payload, await workspace(env, task.site_id))) { stage = "writer"; resume = true; }
     else if (stage === "writer" && payload.repair?.target_languages && task.error?.includes("실제 언어 오류")) resume = true;
     if (!resume) continue;
     delete payload.recovery;

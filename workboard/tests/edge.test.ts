@@ -1331,3 +1331,17 @@ test("budget-blocked research waits without a model call then automatically resu
     assert.equal((d.sqlite.prepare("SELECT status FROM content_jobs WHERE id=?").get(task.job_id) as any).status,"agent_pending");
   } finally {globalThis.fetch=original;}
 });
+
+test("known factual errors are prepared for rewrite while the budget wait remains in force", async () => {
+  const {d,env}=environment();
+  const payload={repair_attempts:1,repair:{unsupported_claims:[{claim:"a"},{claim:"b"}],issues:[]},input:{translations:{en:{}}},research:{briefs:{en:{sources:[]}}},quality:{languages:{en:{passed:true,issues:[]}},verification:{passed:false,claims:[{lang:"en",claim:"wrong weekend",status:"contradicted"}]}},recovery:{scope:"weekly",retry_at:"2026-10-11T15:00:00Z"}};
+  d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('waiting-repair','koreabylocal','waiting-repair','Subway','culture','{}','budget_wait','now','now')").run();
+  d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES('waiting-repair','topic','koreabylocal','verifier','budget_wait',?,'now','now')").run(JSON.stringify(payload));
+  await recoverWorkflows(env,Date.parse("2026-10-06T01:00:00Z"));
+  await recoverWorkflows(env,Date.parse("2026-10-06T01:00:01Z"));
+  const result=d.sqlite.prepare("SELECT stage,status,payload_json FROM agent_workflows WHERE job_id='waiting-repair'").get() as any;
+  assert.equal(result.stage,"writer");assert.equal(result.status,"budget_wait");
+  const saved=JSON.parse(result.payload_json);
+  assert.equal(saved.repair_attempts,2);assert.deepEqual(saved.repair.target_languages,["en"]);
+  assert.equal(saved.recovery.retry_at,payload.recovery.retry_at);
+});
