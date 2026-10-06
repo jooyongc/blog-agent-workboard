@@ -1607,3 +1607,19 @@ test("provider transition resumes credit-blocked edits at their existing checkpo
   assert.equal(state.stage,"editor");assert.equal(state.status,"pending");
   assert.deepEqual(JSON.parse(state.payload_json).editor_completed["old-sonnet"],["en"]);
 });
+
+test("malformed received responses retry once but unknown charges stay gated", async () => {
+  for (const actual of [0.01, null]) {
+    const {env,d}=environment();const {w,input}=supervisorFixture();
+    d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('format-retry',?,?,?,'Travel','{}','review','now','now')").run(w.site_id,input.slug,input.translations.en.title);
+    d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,error,created_at,updated_at) VALUES('format-retry','topic',?,'editor','failed',?,'AI 응답 형식을 확인하지 못했습니다.','now','now')").run(w.site_id,JSON.stringify({slug:input.slug}));
+    d.sqlite.prepare("INSERT INTO ai_runs(id,article_key,month,week,reserved,actual,status,created_at) VALUES('bad-json',?,'2026-10','2026-10-05',0.1,?,'failed','now')").run(`${w.site_id}/${input.slug}`,actual);
+    await recoverWorkflows(env);
+    assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows").get() as any).status,actual===null?"failed":"pending");
+    if(actual!==null) {
+      d.sqlite.prepare("UPDATE agent_workflows SET status='failed'").run();
+      await recoverWorkflows(env);
+      assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows").get() as any).status,"failed");
+    }
+  }
+});

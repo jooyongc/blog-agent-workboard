@@ -152,6 +152,24 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
       payload.response_retries = (payload.response_retries || 0) + 1;
       resume = true;
     }
+    if (
+      task.status === "failed" &&
+      ["supervisor", "editor"].includes(stage) &&
+      task.error?.includes("AI 응답 형식을 확인하지") &&
+      !(payload.format_retries >= 1)
+    ) {
+      const run = await env.WORKBOARD_DB.prepare(
+        "SELECT actual,status FROM ai_runs WHERE article_key=? ORDER BY created_at DESC LIMIT 1",
+      )
+        .bind(`${task.site_id}/${payload.slug}`)
+        .first<{ actual: number | null; status: string }>();
+      // A fully received, billed malformed response is safe to repeat once.
+      // Unknown delivery/timeouts retain their reconciliation gate.
+      if (run?.status === "failed" && run.actual !== null) {
+        payload.format_retries = (payload.format_retries || 0) + 1;
+        resume = true;
+      }
+    }
     if (task.status === "retry_wait")
       resume = Date.parse(payload.provider_retry_at) <= now;
     if (
