@@ -1911,7 +1911,7 @@ function Reports() {
           {data && <div className="form-row">
             {([{label:"월간",used:reserve,cap:data.limits.monthly,reset:data.resets.monthly},{label:"주간",used:data.weekly.reserved,cap:data.limits.weekly,reset:data.resets.weekly}]).map(period => <div key={period.label}>
               <p>{period.label} 사용·예약 ${period.used.toFixed(4)} / ${period.cap.toFixed(2)}</p>
-              <progress aria-label={`${period.label} 예산 사용률`} max={Math.max(period.cap,1)} value={period.cap ? Math.min(period.used,period.cap) : 0} style={{width:"100%",accentColor:"var(--accent, #52734d)"}}/>
+              <progress aria-label={`${period.label} 예산 사용률`} max={period.cap || 1} value={period.cap ? Math.min(period.used,period.cap) : 0} style={{width:"100%",accentColor:"var(--accent, #52734d)"}}/>
               <small>갱신: {new Date(period.reset).toLocaleString("ko-KR",{timeZone:"Asia/Seoul"})} KST</small>
             </div>)}
           </div>}
