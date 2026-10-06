@@ -10,6 +10,7 @@ import { validateDraft } from "./content";
 import { publishJob } from "./publication";
 import { HttpError } from "./http";
 import { BudgetWait } from "./model";
+import { budgetSettings } from "./budget";
 import { creativeAsset, fireflyReady, PendingMedia } from "./firefly";
 const stages = [
   "researcher",
@@ -58,6 +59,7 @@ export function planRepair(payload: any, w: { languages: string[] }) {
 }
 export async function recoverWorkflows(env: Env, now = Date.now()) {
   const tasks = await env.WORKBOARD_DB.prepare("SELECT job_id,site_id,stage,status,error,payload_json FROM agent_workflows WHERE status IN ('failed','budget_wait') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted')) ORDER BY updated_at LIMIT 100").all<{job_id:string;site_id:string;stage:string;status:string;error:string;payload_json:string}>();
+  const settings = tasks.results.some(t => t.status === "budget_wait") ? await budgetSettings(env) : null;
   for (const task of tasks.results) {
     const payload = JSON.parse(task.payload_json);
     let stage = task.stage, resume = false;
@@ -67,7 +69,7 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
         await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET stage='writer',payload_json=? WHERE job_id=? AND status='budget_wait' AND stage='verifier'").bind(JSON.stringify(payload),task.job_id).run();
       } else resume = true;
     }
-    if (task.status === "budget_wait") resume = Date.parse(payload.recovery?.retry_at) <= now;
+    if (task.status === "budget_wait") resume = Date.parse(payload.recovery?.retry_at) <= now || (settings !== null && settings.revision > (payload.recovery?.budget_revision ?? 1));
     else if (task.error?.includes("예산") && task.error.includes("한도")) resume = true;
     else if (stage === "writer" && payload.repair?.target_languages && task.error?.includes("실제 언어 오류")) resume = true;
     if (!resume) continue;
@@ -418,7 +420,7 @@ export async function advanceHarness(env: Env) {
       };
     }
     if (e instanceof BudgetWait) {
-      payload.recovery = { scope: e.scope, retry_at: e.retryAt };
+      payload.recovery = { scope: e.scope, retry_at: e.retryAt, budget_revision: e.revision };
       const error = `${e.message} 한도 갱신 후 자동 재개합니다.`;
       await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET status='budget_wait',payload_json=?,error=?,lease_until=NULL,updated_at=? WHERE job_id=?")
         .bind(JSON.stringify(payload),error,new Date().toISOString(),task.job_id).run();

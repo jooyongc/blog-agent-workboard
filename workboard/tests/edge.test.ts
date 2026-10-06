@@ -62,6 +62,7 @@ function db() {
     "0006_agent_harness.sql",
     "0007_firefly_jobs.sql",
     "0008_media_library.sql",
+    "0009_budget_settings.sql",
   ])
     d.exec(
       fs.readFileSync(
@@ -1344,4 +1345,40 @@ test("known factual errors are prepared for rewrite while the budget wait remain
   const saved=JSON.parse(result.payload_json);
   assert.equal(saved.repair_attempts,2);assert.deepEqual(saved.repair.target_languages,["en"]);
   assert.equal(saved.recovery.retry_at,payload.recovery.retry_at);
+});
+
+test("budget settings require login and reject invalid limits without changing the guard", async () => {
+  const {d,env}=environment();
+  assert.equal((await request("budget",env,{method:"PUT",body:JSON.stringify({monthly:20,weekly:3,article:1})},false)).status,401);
+  for(const input of [{monthly:10,weekly:11,article:0.5},{monthly:10,weekly:2,article:3},{monthly:-1,weekly:2,article:0.5},{monthly:10,weekly:2.001,article:0.5},{monthly:10,weekly:"3",article:0.5}])
+    assert.equal((await request("budget",env,{method:"PUT",body:JSON.stringify(input)})).status,400);
+  const settings=d.sqlite.prepare("SELECT monthly,weekly,article,revision FROM budget_settings").get() as any;
+  assert.deepEqual({...settings},{monthly:10,weekly:2,article:0.5,revision:1});
+});
+
+test("saved budgets drive the DB spending guard and unchanged saves do not reset usage or retry revisions", async () => {
+  const {d,env}=environment();
+  const period={month:"2026-10",week:"2961"};
+  const insert=d.sqlite.prepare("INSERT INTO ai_runs(id,article_key,month,week,reserved,status,created_at) VALUES(?,?,?,?,?,'complete','now')");
+  assert.throws(()=>insert.run("too-high","one",period.month,period.week,0.7),/article_budget/);
+  const response=await request("budget",env,{method:"PUT",body:JSON.stringify({monthly:20,weekly:3,article:1})});
+  assert.equal(response.status,200);assert.equal((await response.json() as any).revision,2);
+  insert.run("allowed","one",period.month,period.week,0.7);
+  assert.throws(()=>insert.run("blocked","one",period.month,period.week,0.4),/article_budget/);
+  const same=await request("budget",env,{method:"PUT",body:JSON.stringify({monthly:20,weekly:3,article:1})});
+  assert.equal((await same.json() as any).revision,2);
+  assert.equal((d.sqlite.prepare("SELECT SUM(reserved) AS used FROM ai_runs").get() as any).used,0.7);
+});
+
+test("a budget increase resumes waiting jobs before the calendar reset without executing a paid call", async () => {
+  const {d,env}=environment();
+  const payload={recovery:{scope:"weekly",retry_at:"2026-10-11T15:00:00Z",budget_revision:1}};
+  d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('increased-budget','koreabylocal','increased-budget','Greetings','culture','{}','budget_wait','now','now')").run();
+  d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES('increased-budget','topic','koreabylocal','researcher','budget_wait',?,'now','now')").run(JSON.stringify(payload));
+  await recoverWorkflows(env,Date.parse("2026-10-06T01:00:00Z"));
+  assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows").get() as any).status,"budget_wait");
+  await request("budget",env,{method:"PUT",body:JSON.stringify({monthly:10,weekly:3,article:0.5})});
+  await recoverWorkflows(env,Date.parse("2026-10-06T01:00:01Z"));
+  const result=d.sqlite.prepare("SELECT status,stage,payload_json FROM agent_workflows").get() as any;
+  assert.equal(result.status,"pending");assert.equal(result.stage,"researcher");assert.equal(JSON.parse(result.payload_json).recovery,undefined);
 });

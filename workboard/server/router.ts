@@ -26,6 +26,8 @@ import { mediaResponse, stockPhotos } from "./media";
 import { advanceHarness, enqueueApproved } from "./harness";
 import { measure } from "./measurement";
 import { fireflyReady } from "./firefly";
+import { budgetSettings, saveBudgetSettings, budgetUsage } from "./budget";
+import { budgetReset } from "./model";
 export async function onRequest({
   request,
   env,
@@ -633,18 +635,14 @@ export async function onRequest({
         blogger_owner: "cloudflare",
       });
     if (route === "reports" && method === "GET") {
-      const month = new Date(Date.now() + 9 * 3600000)
-        .toISOString()
-        .slice(0, 7);
-      const runs = await env.WORKBOARD_DB.prepare(
-        "SELECT * FROM ai_runs ORDER BY created_at DESC LIMIT 100",
-      ).all();
-      const budget = await env.WORKBOARD_DB.prepare(
-        "SELECT COALESCE(SUM(reserved),0) AS reserved,COALESCE(SUM(actual),0) AS actual FROM ai_runs WHERE month=?",
-      )
-        .bind(month)
-        .first();
-      return json({ runs: runs.results, budget, month });
+      const runs = await env.WORKBOARD_DB.prepare("SELECT * FROM ai_runs ORDER BY created_at DESC LIMIT 100").all();
+      const usage = await budgetUsage(env);
+      return json({runs:runs.results,budget:usage.monthly,month:usage.month,limits:await budgetSettings(env),weekly:usage.weekly,resets:{weekly:budgetReset("weekly"),monthly:budgetReset("monthly")}});
+    }
+    if (route === "budget" && method === "PUT") {
+      const settings = await saveBudgetSettings(env, await body<unknown>(request));
+      wakeHarness(env, waitUntil);
+      return json(settings);
     }
     throw new HttpError(404, "요청한 기능을 찾지 못했습니다.");
   } catch (e) {

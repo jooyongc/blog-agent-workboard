@@ -1837,13 +1837,27 @@ function Reports() {
     }[];
     budget: { reserved: number; actual: number };
     month: string;
+    limits: {monthly:number;weekly:number;article:number;revision:number;updated_at:string};
+    weekly: {reserved:number;actual:number};
+    resets: {weekly:string;monthly:string};
   } | null>(null);
   const [error, setError] = useState("");
+  const [limits, setLimits] = useState({monthly:"",weekly:"",article:""});
+  const [saving, setSaving] = useState(false);
+  const [savedNotice, setSavedNotice] = useState("");
   useEffect(() => {
     api<NonNullable<typeof data>>("reports")
-      .then(setData)
+      .then(result => {setData(result);setLimits({monthly:String(result.limits.monthly),weekly:String(result.limits.weekly),article:String(result.limits.article)});})
       .catch((e) => setError(e.message));
   }, []);
+  async function saveBudget(e: FormEvent) {
+    e.preventDefault();setSaving(true);setError("");setSavedNotice("");
+    try {
+      const result = await api<NonNullable<typeof data>["limits"]>("budget", {method:"PUT",body:JSON.stringify({monthly:Number(limits.monthly),weekly:Number(limits.weekly),article:Number(limits.article)})});
+      setData(previous => previous ? {...previous,limits:result} : previous);
+      setSavedNotice("예산 설정을 저장했습니다. 한도가 확보된 대기 작업은 자동 재개합니다.");
+    } catch(e) {setError((e as Error).message);} finally {setSaving(false);}
+  }
   const actual = data?.budget.actual ?? 0;
   const reserve = data?.budget.reserved ?? 0;
   return (
@@ -1863,19 +1877,18 @@ function Reports() {
           },
           {
             label: "남은 월 예산",
-            value: `$${Math.max(0, 10 - reserve).toFixed(2)}`,
-            note: "월 $10 · 예약된 비용 포함",
+            value: `$${Math.max(0, (data?.limits.monthly ?? 0) - reserve).toFixed(2)}`,
+            note: `월 $${data?.limits.monthly ?? "—"} · 예약된 비용 포함`,
           },
           {
-            label: "최근 AI 실행",
-            value: data?.runs.length ?? "—",
-            note: "최근 최대 100건",
+            label: "이번 주 AI 비용",
+            value: `$${(data?.weekly.actual ?? 0).toFixed(4)}`,
+            note: "한국 시간 월요일부터 일요일",
           },
           {
-            label: "완료한 작성",
-            value:
-              data?.runs.filter((r) => r.status === "complete").length ?? "—",
-            note: "Workboard API에서 작성한 초안",
+            label: "남은 주간 예산",
+            value: `$${Math.max(0,(data?.limits.weekly ?? 0)-(data?.weekly.reserved ?? 0)).toFixed(2)}`,
+            note: `주 $${data?.limits.weekly ?? "—"} · 예약된 비용 포함`,
           },
         ].map((m) => (
           <article className="studio-metric" key={m.label}>
@@ -1885,6 +1898,29 @@ function Reports() {
           </article>
         ))}
       </div>
+      <section className="studio-panel" id="budget-settings">
+        <div className="panel-heading"><div><h2>AI 예산 설정</h2><p>모든 워크스페이스에 함께 적용되는 USD 한도입니다.</p></div></div>
+        <form className="form-body" onSubmit={saveBudget}>
+          <div className="form-row">
+            {([{key:"monthly",label:"월간 한도 (USD)"},{key:"weekly",label:"주간 한도 (USD)"},{key:"article",label:"글당 한도 (USD)"}] as const).map(field =>
+              <label className="field-label" key={field.key}>{field.label}
+                <input type="number" min={0} max={10000} step="0.01" required value={limits[field.key]} disabled={!data || saving} onChange={e => setLimits(previous => ({...previous,[field.key]:e.target.value}))}/>
+              </label>)}
+          </div>
+          <p className="flow-description">글당 ≤ 주간 ≤ 월간으로 설정하세요. 글당 한도는 한 달 동안 같은 글의 리서치·집필·수정·검증 비용을 합산하며, 영어·일본어도 함께 계산합니다. 0으로 설정하면 해당 한도의 새 AI 실행을 멈춥니다.</p>
+          {data && <div className="form-row">
+            {([{label:"월간",used:reserve,cap:data.limits.monthly,reset:data.resets.monthly},{label:"주간",used:data.weekly.reserved,cap:data.limits.weekly,reset:data.resets.weekly}]).map(period => <div key={period.label}>
+              <p>{period.label} 사용·예약 ${period.used.toFixed(4)} / ${period.cap.toFixed(2)}</p>
+              <progress aria-label={`${period.label} 예산 사용률`} max={Math.max(period.cap,1)} value={period.cap ? Math.min(period.used,period.cap) : 0} style={{width:"100%",accentColor:"var(--accent, #52734d)"}}/>
+              <small>갱신: {new Date(period.reset).toLocaleString("ko-KR",{timeZone:"Asia/Seoul"})} KST</small>
+            </div>)}
+          </div>}
+          <p className="flow-description">한도에는 완료 비용과 진행·결과 미확인 작업의 예약 비용이 포함됩니다. 저장해도 기존 사용량은 초기화되지 않습니다.</p>
+          {error && <Notice>{error}</Notice>}
+          {savedNotice && <div role="status" className="success-notice">{savedNotice}</div>}
+          <button className="button-primary" disabled={!data || saving}>{saving ? "저장 중…" : "예산 설정 저장"}</button>
+        </form>
+      </section>
       <section className="studio-panel">
         <div className="panel-heading">
           <div>

@@ -1,7 +1,8 @@
 import type { Env } from "./env";
 import { HttpError } from "./http";
+import { budgetSettings } from "./budget";
 export class BudgetWait extends HttpError {
-  constructor(public scope: "weekly" | "monthly" | "article", public retryAt: string, message: string) { super(429, message); }
+  constructor(public scope: "weekly" | "monthly" | "article", public retryAt: string, message: string, public revision = 0) { super(429, message); }
 }
 export function budgetReset(scope: "weekly" | "monthly" | "article", now = Date.now()) {
   const local = new Date(now + 9 * 3600000);
@@ -44,18 +45,13 @@ export async function modelJson(
       .run();
   } catch (error) {
     const detail = String(error);
-    const message = detail.includes("monthly_budget")
-      ? "월간 AI 예산 $10 한도에 도달했습니다."
-      : detail.includes("weekly_budget")
-        ? "주간 AI 예산 $2 한도에 도달했습니다."
-        : detail.includes("article_budget")
-          ? "이 글의 AI 예산 $0.50 한도에 도달했습니다."
-          : "AI 예산 예약을 저장하지 못했습니다.";
     if (detail.includes("budget")) {
+      const settings = await budgetSettings(env);
       const scope = detail.includes("monthly_budget") ? "monthly" : detail.includes("weekly_budget") ? "weekly" : "article";
-      throw new BudgetWait(scope, budgetReset(scope, now), message);
+      const label = scope === "monthly" ? "월간" : scope === "weekly" ? "주간" : "이 글의";
+      throw new BudgetWait(scope, budgetReset(scope, now), `${label} AI 예산 $${settings[scope].toFixed(2)} 한도에 도달했습니다.`, settings.revision);
     }
-    throw new HttpError(503, message);
+    throw new HttpError(503, "AI 예산 예약을 저장하지 못했습니다.");
   }
   let cost = 0,
     settled = false;
