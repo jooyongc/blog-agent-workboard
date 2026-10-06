@@ -9,7 +9,7 @@ import { quality } from "./seo";
 import { validateDraft } from "./content";
 import { publishJob } from "./publication";
 import { HttpError } from "./http";
-import { BudgetWait } from "./model";
+import { BudgetWait, IncompleteResponse } from "./model";
 import { budgetSettings } from "./budget";
 import {
   supervise,
@@ -137,6 +137,10 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
       task.error?.includes("실제 언어 오류")
     )
       resume = true;
+    if (task.status === "failed" && ["supervisor","editor"].includes(stage) && task.error?.includes("AI 답변이 완결") && !(payload.response_retries >= 1)) {
+      payload.response_retries = (payload.response_retries || 0)+1;
+      resume = true;
+    }
     if (!resume) continue;
     delete payload.recovery;
     const changed = await env.WORKBOARD_DB.prepare(
@@ -281,6 +285,7 @@ export async function advanceHarness(env: Env) {
         payload.title,
         payload.category,
         payload.slug,
+        payload.supervision?.at(-1)?.action === "research" ? payload.supervision.at(-1).instructions : undefined,
       );
     if (task.stage === "writer") {
       const result = await generate(
@@ -547,6 +552,13 @@ export async function advanceHarness(env: Env) {
       next: next || null,
     };
   } catch (e) {
+    if (e instanceof IncompleteResponse && ["supervisor","editor"].includes(task.stage) && !(payload.response_retries >= 1)) {
+      payload.response_retries = (payload.response_retries || 0)+1;
+      await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET status='pending',payload_json=?,error=NULL,lease_until=NULL,updated_at=? WHERE job_id=?").bind(JSON.stringify(payload),new Date().toISOString(),task.job_id).run();
+      await env.WORKBOARD_DB.prepare("UPDATE agent_steps SET status='waiting',error='출력 길이 제한: 한 번 자동 복구합니다.',finished_at=? WHERE id=?").bind(new Date().toISOString(),step).run();
+      if (payload.input) await saveProgress(env,task.job_id,payload,task.stage==="supervisor"?"supervising":"editing");
+      return {worked:true,job_id:task.job_id,agent:task.stage,recovering:true};
+    }
     if (e instanceof PendingMedia) {
       await env.WORKBOARD_DB.prepare(
         "UPDATE agent_workflows SET status='pending',payload_json=?,lease_until=NULL,updated_at=? WHERE job_id=?",

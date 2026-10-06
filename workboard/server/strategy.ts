@@ -220,6 +220,7 @@ export async function research(
   title: string,
   category: string,
   articleSlug?: string,
+  supervisorAssignment?: string,
 ) {
   const w = await workspace(env, siteId);
   const notes: Record<string, string> = {},
@@ -239,6 +240,7 @@ export async function research(
       audience: w.strategy.audience,
       pillars: w.strategy.pillars,
       today: new Date().toISOString().slice(0, 10),
+      ...(supervisorAssignment ? {supervisor_assignment: supervisorAssignment.slice(0,6000)} : {}),
     };
     const domains = w.strategy.source_domains;
     let r = await modelJson(env, key, system, input, 4000, domains);

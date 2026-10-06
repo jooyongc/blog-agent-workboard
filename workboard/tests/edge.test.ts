@@ -1503,3 +1503,21 @@ test("a stalled verifier is supervised, edited and approved entirely in the back
     assert.ok("error" in result && result.error?.includes("상위 검토 승인"));
   } finally {globalThis.fetch=original;}
 });
+
+test("a confirmed truncated senior response gets only one automatic recovery", async () => {
+  const {env,d}=environment();env.ANTHROPIC_API_KEY="test";
+  const {w,input,research}=supervisorFixture();
+  d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('truncated-review',?,?,?,'Travel','{}','review','now','now')").run(w.site_id,input.slug,input.translations.en.title);
+  d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES('truncated-review','topic',?,'supervisor','pending',?,'now','now')").run(w.site_id,JSON.stringify({title:input.translations.en.title,slug:input.slug,input,research}));
+  const original=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>{calls++;return Response.json({stop_reason:"max_tokens",usage:{input_tokens:100,output_tokens:100},content:[]});};
+  try {
+    await advanceHarness(env);
+    assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows").get() as any).status,"pending");
+    await advanceHarness(env);
+    assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows").get() as any).status,"failed");
+    await advanceHarness(env);
+    assert.equal(calls,2);
+    assert.equal((d.sqlite.prepare("SELECT COUNT(*) AS n FROM ai_runs WHERE actual>0").get() as any).n,2);
+  } finally {globalThis.fetch=original;}
+});

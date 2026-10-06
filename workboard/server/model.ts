@@ -6,6 +6,9 @@ export const MODEL_RATES = {
   "claude-haiku-4-5": { input: 1, output: 5 },
   "claude-sonnet-5-5": { input: 2, output: 10 },
 } as const;
+export class IncompleteResponse extends HttpError {
+  constructor(public reason:string) { super(502,"AI 답변이 완결되지 않았습니다. 출력 복구가 필요합니다."); }
+}
 export class BudgetWait extends HttpError {
   constructor(
     public scope: "weekly" | "monthly" | "article",
@@ -151,10 +154,7 @@ export async function modelJson(
       .bind(cost, cost, id)
       .run();
     if (d.stop_reason !== "end_turn")
-      throw new HttpError(
-        502,
-        "AI 답변이 완결되지 않았습니다. 자동 재시도하지 않았습니다.",
-      );
+      throw new IncompleteResponse(d.stop_reason);
     const text = d.content
       .filter((c) => c.type === "text")
       .map((c) => c.text ?? "")
