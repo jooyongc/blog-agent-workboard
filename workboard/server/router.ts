@@ -496,7 +496,7 @@ export async function onRequest({
         runs: r.results,
         workflows: (
           await env.WORKBOARD_DB.prepare(
-            "SELECT job_id,topic_id,stage,status,error FROM agent_workflows WHERE site_id=? ORDER BY created_at DESC LIMIT 100",
+            "SELECT job_id,topic_id,stage,status,error,json_extract(payload_json,'$.recovery') AS recovery_json FROM agent_workflows WHERE site_id=? ORDER BY created_at DESC LIMIT 100",
           )
             .bind(id)
             .all()

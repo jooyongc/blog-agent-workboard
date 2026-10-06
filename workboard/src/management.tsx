@@ -1214,6 +1214,8 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
           <div className="idea-list">
             {data.jobs.map((j: any) => {
               const report = parseVerification(j.quality_json);
+              const workflow = data?.workflows?.find((f: any) => f.job_id === j.id);
+              const recovery = workflow?.recovery_json ? JSON.parse(workflow.recovery_json) : null;
               return (
                 <article key={j.id}>
                   <span
@@ -1223,12 +1225,13 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                       {
                         ready: "예약 대기",
                         review: "검토 필요",
+                        budget_wait: "예산 갱신 후 자동 재개",
                         published: "발행 완료",
                         drafted: "초안 저장",
                         failed: "실패 · 결과 확인",
                         researching: "리서치 중",
                         generating: "작성 중",
-                        agent_pending: "미디어 에이전트 작업 중",
+                        agent_pending: "에이전트 자동 실행 대기",
                         verifying: "검증 에이전트 작업 중",
                         publishing: "임시 발행 중",
                         needs_reconcile: "중단 · 원격 확인",
@@ -1241,7 +1244,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                       ? new Date(j.publish_at).toLocaleString("ko-KR", {
                           timeZone: "Asia/Seoul",
                         })
-                      : "작성 중"}
+                      : j.status === "budget_wait" ? "예산 갱신 대기" : "작성 중"}
                   </p>
                   <div className="agent-stage-list">
                     {[
@@ -1271,6 +1274,8 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                             ? "완료"
                             : step?.status === "running"
                               ? "진행 중"
+                              : step?.status === "waiting"
+                                ? "자동 재개 대기"
                               : step?.status === "failed"
                                 ? "확인 필요"
                                 : "대기"}
@@ -1278,7 +1283,8 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                       );
                     })}
                   </div>
-                  {j.error && !report && <p role="alert">{j.error}</p>}
+                  {j.error && <p role="alert">{j.error}</p>}
+                  {recovery?.retry_at && <p>자동 재개 예정: {new Date(recovery.retry_at).toLocaleString("ko-KR", {timeZone: "Asia/Seoul"})} KST 이후 정기 실행</p>}
                   {report && (
                     <div className="verification-report" role="alert">
                       <p>{report.reason}</p>

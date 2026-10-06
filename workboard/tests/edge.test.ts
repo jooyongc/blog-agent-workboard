@@ -13,11 +13,13 @@ import { articleUrl, workspace } from "../server/registry";
 import { quality, extractFaq, schema } from "../server/seo";
 import { googleCredentials } from "../server/oauth";
 import { publishJob } from "../server/publication";
-import { modelJson } from "../server/model";
+import { modelJson, BudgetWait, budgetReset } from "../server/model";
 import {
   advanceHarness,
   enqueueApproved,
   canRepairAgain,
+  planRepair,
+  recoverWorkflows,
 } from "../server/harness";
 import { insertStockPhotos } from "../server/media";
 import { creativeAsset, PendingMedia } from "../server/firefly";
@@ -1291,4 +1293,41 @@ test("Japanese labels never make an English article pass Japanese quality", asyn
   assert.equal(result.passed, false);
   assert.ok(result.issues.some((x) => x.includes("일본어 본문")));
   assert.ok(result.issues.some((x) => x.includes("일본어 제목")));
+});
+
+
+test("legacy verifier recovery uses the previous failed claims and preserves correct languages", () => {
+  const payload: any = {repair_attempts:1, repair:{unsupported_claims:[{claim:"a"},{claim:"b"}],issues:[]}, input:{translations:{en:{},ja:{}}}, research:{briefs:{en:{sources:[{url:"https://example.com/hours",evidence:"weekends 24:00"}]} }}, quality:{languages:{en:{passed:true,issues:[]},ja:{passed:true,issues:[]}}, verification:{passed:false,reason:"wrong weekend",claims:[{lang:"en",claim:"weekends 01:00",status:"contradicted",source_url:"https://example.com/hours"}]}}};
+  assert.equal(planRepair(payload,{languages:["en","ja"]}),true);
+  assert.equal(payload.repair_attempts,2);
+  assert.deepEqual(payload.repair.target_languages,["en"]);
+  assert.equal(payload.repair.unsupported_claims[0].evidence[0].evidence,"weekends 24:00");
+  assert.equal(planRepair(payload,{languages:["en","ja"]}),false);
+});
+
+test("budget reset matches the enforced Korean week and month boundaries", () => {
+  const now=Date.parse("2026-10-06T01:00:00Z");
+  assert.equal(budgetReset("weekly",now),"2026-10-11T15:00:00.000Z");
+  assert.equal(budgetReset("monthly",now),"2026-10-31T15:00:00.000Z");
+  assert.equal(budgetReset("article",now),budgetReset("monthly",now));
+});
+
+test("budget-blocked research waits without a model call then automatically resumes its checkpoint", async () => {
+  const {d,env}=environment();env.ANTHROPIC_API_KEY="test-key";
+  const now=Date.now(), month=new Date(now+9*3600000).toISOString().slice(0,7), week=String(Math.floor((now+9*3600000-4*86400000)/(7*86400000)));
+  for(let i=0;i<5;i++) d.sqlite.prepare("INSERT INTO ai_runs(id,article_key,month,week,reserved,status,created_at) VALUES(?,?,?,?,0.398,'complete',?)").run("budget"+i,"other"+i,month,week,new Date(now).toISOString());
+  d.sqlite.prepare("INSERT INTO topic_ideas(id,site_id,title,category,status,created_at) VALUES('recover-budget','koreabylocal','Korean greetings','culture','approved',?)").run(new Date(now).toISOString());
+  const original=globalThis.fetch;let calls=0;globalThis.fetch=(async()=>{calls++;throw Error("Must not call paid model");}) as typeof fetch;
+  try {
+    await advanceHarness(env);
+    const task=d.sqlite.prepare("SELECT * FROM agent_workflows WHERE topic_id='recover-budget'").get() as any;
+    assert.equal(task.status,"budget_wait");assert.equal(task.stage,"researcher");assert.equal(calls,0);
+    const retry=JSON.parse(task.payload_json).recovery.retry_at;
+    await recoverWorkflows(env,Date.parse(retry)-1);
+    assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows WHERE job_id=?").get(task.job_id) as any).status,"budget_wait");
+    await recoverWorkflows(env,Date.parse(retry));
+    const resumed=d.sqlite.prepare("SELECT status,stage FROM agent_workflows WHERE job_id=?").get(task.job_id) as any;
+    assert.equal(resumed.status,"pending");assert.equal(resumed.stage,"researcher");
+    assert.equal((d.sqlite.prepare("SELECT status FROM content_jobs WHERE id=?").get(task.job_id) as any).status,"agent_pending");
+  } finally {globalThis.fetch=original;}
 });

@@ -1,5 +1,14 @@
 import type { Env } from "./env";
 import { HttpError } from "./http";
+export class BudgetWait extends HttpError {
+  constructor(public scope: "weekly" | "monthly" | "article", public retryAt: string, message: string) { super(429, message); }
+}
+export function budgetReset(scope: "weekly" | "monthly" | "article", now = Date.now()) {
+  const local = new Date(now + 9 * 3600000);
+  return scope === "weekly"
+    ? new Date((Math.floor((now + 9 * 3600000 - 4 * 86400000) / (7 * 86400000)) + 1) * 7 * 86400000 + 4 * 86400000 - 9 * 3600000).toISOString()
+    : new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth() + 1, 1) - 9 * 3600000).toISOString();
+}
 export async function modelJson(
   env: Env,
   key: string,
@@ -42,7 +51,11 @@ export async function modelJson(
         : detail.includes("article_budget")
           ? "이 글의 AI 예산 $0.50 한도에 도달했습니다."
           : "AI 예산 예약을 저장하지 못했습니다.";
-    throw new HttpError(detail.includes("budget") ? 429 : 503, message);
+    if (detail.includes("budget")) {
+      const scope = detail.includes("monthly_budget") ? "monthly" : detail.includes("weekly_budget") ? "weekly" : "article";
+      throw new BudgetWait(scope, budgetReset(scope, now), message);
+    }
+    throw new HttpError(503, message);
   }
   let cost = 0,
     settled = false;

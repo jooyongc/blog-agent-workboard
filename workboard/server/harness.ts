@@ -9,6 +9,7 @@ import { quality } from "./seo";
 import { validateDraft } from "./content";
 import { publishJob } from "./publication";
 import { HttpError } from "./http";
+import { BudgetWait } from "./model";
 import { creativeAsset, fireflyReady, PendingMedia } from "./firefly";
 const stages = [
   "researcher",
@@ -36,6 +37,42 @@ export function canRepairAgain(
     );
   return false;
 }
+export function planRepair(payload: any, w: { languages: string[] }) {
+  const report = payload.quality?.verification;
+  if (!report || !payload.input || !payload.research?.briefs) return false;
+  const issues = Object.values(payload.quality.languages || {}).flatMap((q: any) => q.issues || []);
+  const failing = (report.claims?.length || 0) + issues.length;
+  if (report.passed && !failing) return false;
+  const previous = payload.repair_failing ?? (payload.repair?.unsupported_claims ? payload.repair.unsupported_claims.length + (payload.repair.issues?.length || 0) : undefined);
+  if (!canRepairAgain(payload.repair_attempts ?? 0, previous, failing)) return false;
+  payload.repair_attempts = (payload.repair_attempts ?? 0) + 1;
+  payload.repair_failing = failing;
+  const targets = w.languages.filter((l) => report.claims?.some((c: any) => c.lang === l) || !payload.quality.languages?.[l]?.passed);
+  payload.repair = {
+    factual: report.passed, reason: report.reason, target_languages: targets.length ? targets : w.languages,
+    unsupported_claims: (report.claims || []).map((c: any) => ({...c, evidence: payload.research.briefs[c.lang]?.sources?.filter((source: any) => source.url === c.source_url)})),
+    issues, research_unsupported: Object.values(payload.research.briefs).flatMap((b: any) => b.unsupported || []),
+    instruction: "Correct listed contradicted or unsupported statements everywhere including introduction, tables and FAQ. Use only the exact supplied evidence. Distinguish weekdays from weekends and holidays, and 24:00 midnight from 25:00 next-day 01:00. Delete claims without evidence. Never invent facts. Keep two distinct exact research source URLs visible. Independently write each target language and preserve unaffected languages.",
+  };
+  return true;
+}
+export async function recoverWorkflows(env: Env, now = Date.now()) {
+  const tasks = await env.WORKBOARD_DB.prepare("SELECT job_id,site_id,stage,status,error,payload_json FROM agent_workflows WHERE status IN ('failed','budget_wait') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted')) ORDER BY updated_at LIMIT 100").all<{job_id:string;site_id:string;stage:string;status:string;error:string;payload_json:string}>();
+  for (const task of tasks.results) {
+    const payload = JSON.parse(task.payload_json);
+    let stage = task.stage, resume = false;
+    if (task.status === "budget_wait") resume = Date.parse(payload.recovery?.retry_at) <= now;
+    else if (task.error?.includes("예산") && task.error.includes("한도")) resume = true;
+    else if (stage === "verifier" && planRepair(payload, await workspace(env, task.site_id))) { stage = "writer"; resume = true; }
+    else if (stage === "writer" && payload.repair?.target_languages && task.error?.includes("실제 언어 오류")) resume = true;
+    if (!resume) continue;
+    delete payload.recovery;
+    const changed = await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET stage=?,status='pending',error=NULL,payload_json=?,updated_at=? WHERE job_id=? AND status=?")
+      .bind(stage, JSON.stringify(payload), new Date(now).toISOString(), task.job_id, task.status).run();
+    if (changed.meta.changes) await env.WORKBOARD_DB.prepare("UPDATE content_jobs SET status='agent_pending',error=NULL,updated_at=? WHERE id=? AND status NOT IN ('cancelled','published','drafted')").bind(new Date(now).toISOString(),task.job_id).run();
+  }
+}
+
 export async function enqueueApproved(env: Env) {
   const topics = await env.WORKBOARD_DB.prepare(
     "SELECT t.id,t.site_id,t.title,t.category FROM topic_ideas t WHERE t.status='approved' AND NOT EXISTS(SELECT 1 FROM agent_workflows f WHERE f.topic_id=t.id) ORDER BY t.created_at LIMIT 5",
@@ -78,6 +115,7 @@ export async function enqueueApproved(env: Env) {
   }
 }
 export async function advanceHarness(env: Env) {
+  await recoverWorkflows(env);
   const reconnect = await env.WORKBOARD_DB.prepare(
     "SELECT job_id,site_id,stage,error FROM agent_workflows WHERE status='failed' AND stage IN ('photo_editor','publisher')",
   ).all<{ job_id: string; site_id: string; stage: string; error: string }>();
@@ -268,36 +306,7 @@ export async function advanceHarness(env: Env) {
       };
       const issues = Object.values(scores).flatMap((q) => q.issues);
       if (!report.passed || !Object.values(scores).every((q) => q.passed)) {
-        const failing = report.claims.length + issues.length;
-        if (
-          canRepairAgain(
-            payload.repair_attempts ?? 0,
-            payload.repair_failing,
-            failing,
-          )
-        ) {
-          payload.repair_attempts = (payload.repair_attempts ?? 0) + 1;
-          payload.repair_failing = failing;
-          payload.repair = {
-            factual: report.passed,
-            reason: report.reason,
-            unsupported_claims: report.claims.map((c) => ({
-              lang: c.lang,
-              claim: c.claim,
-              status: c.status,
-            })),
-            issues,
-            research_unsupported: Object.values(
-              payload.research.briefs as Record<
-                string,
-                { unsupported?: unknown[] }
-              >,
-            ).flatMap((b) =>
-              Array.isArray(b?.unsupported) ? b.unsupported : [],
-            ),
-            instruction:
-              "Rewrite using only directly supported research. Every listed unsupported or contradicted claim must be deleted or rewritten to state only what the cited evidence says. Also remove any statement about the research_unsupported topics. Do not add new facts, numbers, prices, dates, brand or shop names. Fix all listed structural issues. Keep at least two distinct exact source URLs as visible links.",
-          };
+        if (planRepair(payload, w)) {
           repairNext = "writer";
         } else
           throw new HttpError(
@@ -402,6 +411,16 @@ export async function advanceHarness(env: Env) {
         job_id: task.job_id,
         agent: task.stage,
       };
+    }
+    if (e instanceof BudgetWait) {
+      payload.recovery = { scope: e.scope, retry_at: e.retryAt };
+      const error = `${e.message} 한도 갱신 후 자동 재개합니다.`;
+      await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET status='budget_wait',payload_json=?,error=?,lease_until=NULL,updated_at=? WHERE job_id=?")
+        .bind(JSON.stringify(payload),error,new Date().toISOString(),task.job_id).run();
+      await env.WORKBOARD_DB.prepare("UPDATE agent_steps SET status='waiting',error=?,finished_at=? WHERE id=?").bind(error,new Date().toISOString(),step).run();
+      if (payload.input) await saveProgress(env,task.job_id,payload,"budget_wait");
+      await env.WORKBOARD_DB.prepare("UPDATE content_jobs SET status='budget_wait',error=?,updated_at=? WHERE id=?").bind(error,new Date().toISOString(),task.job_id).run();
+      return {worked:true,job_id:task.job_id,agent:task.stage,blocked:true,retry_at:e.retryAt};
     }
     const error = e instanceof Error ? e.message : "에이전트 실행 실패";
     await env.WORKBOARD_DB.prepare(
