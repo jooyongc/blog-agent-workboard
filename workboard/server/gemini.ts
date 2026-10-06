@@ -86,7 +86,7 @@ export async function parseGemini(
   const text = (candidate?.content?.parts || [])
     .filter((p: any) => !p.thought && typeof p.text === "string")
     .map((p: any) => p.text)
-    .join("\n");
+    .join("");
   const metadata = candidate?.groundingMetadata || {};
   const links = [
     ...new Set<string>(

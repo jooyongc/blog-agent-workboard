@@ -1623,3 +1623,8 @@ test("malformed received responses retry once but unknown charges stay gated", a
     }
   }
 });
+
+ test("Gemini text chunks preserve JSON string boundaries", async () => {
+ const result=await parseGemini({candidates:[{finishReason:"STOP",content:{parts:[{text:'{"content_md":"first '},{text:'second"}'}]}}]});
+ assert.deepEqual(result.data,{content_md:"first second"});
+ });
