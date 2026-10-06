@@ -17,6 +17,7 @@ import {
   useLocation,
   useNavigate,
 } from "react-router-dom";
+import { modelLabel } from "../shared/model-label";
 import { Icons, type IconName } from "./icons";
 import { workspaceLook, LANGUAGE_LABEL } from "./workspace-look";
 import { api, ApiError } from "./api";
@@ -2120,7 +2121,7 @@ function Reports() {
             </div>
           )}
           <p className="flow-description">
-            상위 Sonnet 검토·보완 비용도 같은 글의 한도에 포함됩니다. 한도에는
+            상위 검토·보완 모델 비용도 같은 글의 한도에 포함됩니다. 한도에는
             완료 비용과 진행·결과 미확인 작업의 예약 비용이 포함됩니다. 저장해도
             기존 사용량은 초기화되지 않습니다.
           </p>
@@ -2171,11 +2172,7 @@ function Reports() {
                         }[r.status] ?? r.status}
                       </span>
                     </td>
-                    <td>
-                      {r.model === "claude-sonnet-5-5"
-                        ? "Sonnet 5.5"
-                        : "Haiku 4.5"}
-                    </td>
+                    <td>{modelLabel(r.model)}</td>
                     <td>${(r.actual ?? r.reserved).toFixed(4)}</td>
                     <td>
                       {new Date(r.created_at).toLocaleDateString("ko-KR")}

@@ -9,7 +9,13 @@ import { quality } from "./seo";
 import { validateDraft } from "./content";
 import { publishJob } from "./publication";
 import { HttpError } from "./http";
-import { BudgetWait, IncompleteResponse, ProviderWait } from "./model";
+import {
+  BudgetWait,
+  IncompleteResponse,
+  ProviderWait,
+  workerModel,
+  reviewModel,
+} from "./model";
 import { budgetSettings } from "./budget";
 import {
   supervise,
@@ -170,6 +176,16 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
       task.error?.includes("원격에 같은 slug")
     )
       resume = true;
+    if (
+      task.status === "failed" &&
+      env.AI_PROVIDER === "gemini" &&
+      env.GEMINI_API_KEY &&
+      task.error?.includes("credit balance") &&
+      !payload.gemini_transition
+    ) {
+      payload.gemini_transition = true;
+      resume = true;
+    }
     if (!resume) continue;
     delete payload.recovery;
     const changed = await env.WORKBOARD_DB.prepare(
@@ -548,8 +564,10 @@ export async function advanceHarness(env: Env) {
               ? payload.supervision?.at(-1)
               : undefined,
           model: ["supervisor", "editor"].includes(task.stage)
-            ? SUPERVISOR_MODEL
-            : undefined,
+            ? reviewModel(env)
+            : ["researcher", "writer", "verifier"].includes(task.stage)
+              ? workerModel(env)
+              : undefined,
         }),
         new Date().toISOString(),
         step,

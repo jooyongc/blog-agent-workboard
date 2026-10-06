@@ -10,6 +10,8 @@ export type Env = {
   NATIVE_BLOG_SUPABASE_URL?: string;
   NATIVE_BLOG_SUPABASE_KEY?: string;
   ANTHROPIC_API_KEY?: string;
+  GEMINI_API_KEY?: string;
+  AI_PROVIDER?: string;
   AI_ENABLED?: string;
 };
 export type Context = {

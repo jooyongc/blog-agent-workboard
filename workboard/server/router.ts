@@ -28,7 +28,7 @@ import { measure } from "./measurement";
 import { SUPERVISOR_MODEL, MAX_SUPERVISOR_ROUNDS } from "./supervisor";
 import { fireflyReady } from "./firefly";
 import { budgetSettings, saveBudgetSettings, budgetUsage, budgetExamples } from "./budget";
-import { budgetReset } from "./model";
+import { budgetReset,workerModel,reviewModel } from "./model";
 export async function onRequest({
   request,
   env,
@@ -488,7 +488,7 @@ export async function onRequest({
         .all();
       return json({
         workspace: w,
-        orchestration: {runtime:"Cloudflare Queues",supervisor_model:SUPERVISOR_MODEL,worker_model:"claude-haiku-4-5",max_review_rounds:MAX_SUPERVISOR_ROUNDS,background:true},
+        orchestration: {runtime:"Cloudflare Queues",supervisor_model:reviewModel(env),worker_model:workerModel(env),max_review_rounds:MAX_SUPERVISOR_ROUNDS,background:true},
         connection: await readiness(w, env),
         media: {
           pexels: !!env.PEXELS_API_KEY,
@@ -630,7 +630,9 @@ export async function onRequest({
     if (route === "settings" && method === "GET")
       return json({
         runtime: "Cloudflare Pages + Cron Worker",
-        ai_ready: env.AI_ENABLED === "true" && !!env.ANTHROPIC_API_KEY,
+        ai_ready: env.AI_ENABLED === "true" && !!(env.AI_PROVIDER === "gemini" ? env.GEMINI_API_KEY : env.ANTHROPIC_API_KEY),
+        ai_provider: env.AI_PROVIDER==="gemini"?"gemini":"anthropic",
+        ai_models: {worker:workerModel(env),supervisor:reviewModel(env)},
         database_ready: !!env.WORKBOARD_DB,
         workspaces: await Promise.all(catalog.map((w) => readiness(w, env))),
         scheduler: "blog-agent-workboard-scheduler",

@@ -1,4 +1,6 @@
 import { test } from "node:test";
+import { parseGemini } from "../server/gemini";
+import { workerModel, reviewModel } from "../server/model";
 import { getPosts } from "../server/content";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -1562,4 +1564,46 @@ test("an existing public original becomes a private correction draft without dup
     assert.deepEqual(rows.get(input.slug),originalRow);
     assert.equal((d.sqlite.prepare("SELECT COUNT(*) AS n FROM publication_receipts WHERE remote_json IS NULL").get() as any).n,0);
   } finally {globalThis.fetch=original;}
+});
+
+test("Gemini runs without Anthropic and accounts for thinking and cached tokens", async () => {
+  const {env,d}=environment();env.AI_PROVIDER="gemini";env.GEMINI_API_KEY="test-google-key";
+  assert.equal(workerModel(env),"gemini-3.8-flash");assert.equal(reviewModel(env),"gemini-3.1-pro-preview");
+  const original=globalThis.fetch;
+  globalThis.fetch=async(url,init)=>{
+    assert.ok(String(url).endsWith("gemini-3.8-flash:generateContent"));
+    assert.ok(!String(url).includes("test-google-key"));
+    assert.equal((init?.headers as Record<string,string>)["x-goog-api-key"],"test-google-key");
+    const body=JSON.parse(String(init?.body));assert.equal(body.generationConfig.responseMimeType,"application/json");
+    return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{thought:true,text:"private reasoning"},{text:'{"ok":true}'}]}}],usageMetadata:{promptTokenCount:1000,candidatesTokenCount:200,thoughtsTokenCount:300,cachedContentTokenCount:100}});
+  };
+  try {
+    const result=await modelJson(env,"koreadecode/gemini-price","system",{},2000);
+    assert.deepEqual(result.data,{ok:true});assert.ok(Math.abs(result.cost_usd-0.0025575)<1e-10);
+    assert.equal((d.sqlite.prepare("SELECT model FROM ai_runs").get() as any).model,"gemini-3.8-flash");
+  } finally {globalThis.fetch=original;}
+});
+
+test("Gemini grounding trusts only exact observed redirects to approved sources", async () => {
+  const direct="https://english.visitseoul.net/miscellaneous",redirect="https://vertexaisearch.cloud.google.com/grounding-api-redirect/source";
+  const original=globalThis.fetch;let calls=0;
+  globalThis.fetch=async()=>{calls++;return new Response(null,{status:302,headers:{Location:direct}});};
+  try {
+    const raw={candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify({sources:[{url:redirect,claim:"hours",evidence:"05:00"}]})}]},groundingMetadata:{webSearchQueries:["hours","hours"],groundingChunks:[{web:{uri:redirect}},{web:{uri:direct}},{web:{uri:"https://malicious.test/source"}}]}}],usageMetadata:{promptTokenCount:100,candidatesTokenCount:10}};
+    const result=await parseGemini(raw,["english.visitseoul.net"]);
+    assert.equal(calls,1);assert.equal(result.data.sources[0].url,direct);
+    assert.ok(result.evidence_urls.every(url=>url===direct));assert.equal(result.searches,1);
+  } finally {globalThis.fetch=original;}
+});
+
+test("provider transition resumes credit-blocked edits at their existing checkpoint", async () => {
+  const {env,d}=environment();env.AI_PROVIDER="gemini";env.GEMINI_API_KEY="test";
+  const {w,input,research,decision}=supervisorFixture();
+  const payload={slug:input.slug,input,research,supervision:[{...decision,run_id:"old-sonnet"}],editor_completed:{"old-sonnet":["en"]}};
+  d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('gemini-transition',?,?,?,'Travel','{}','review','now','now')").run(w.site_id,input.slug,input.translations.en.title);
+  d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,error,created_at,updated_at) VALUES('gemini-transition','topic',?,'editor','failed',?,'Your credit balance is too low','now','now')").run(w.site_id,JSON.stringify(payload));
+  await recoverWorkflows(env);
+  const state=d.sqlite.prepare("SELECT status,stage,payload_json FROM agent_workflows").get() as any;
+  assert.equal(state.stage,"editor");assert.equal(state.status,"pending");
+  assert.deepEqual(JSON.parse(state.payload_json).editor_completed["old-sonnet"],["en"]);
 });

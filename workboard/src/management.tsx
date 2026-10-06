@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, type FormEvent } from "react";
 import { Link } from "react-router-dom";
+import { modelLabel } from "../shared/model-label";
 import { api } from "./api";
 import type { Workspace } from "../shared/types";
 import { CATALOG } from "../shared/catalog";
@@ -1151,7 +1152,9 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
             보완 에이전트에 작업을 배정합니다.
           </p>
         </div>
-        <span className="status-pill green">상위 검토 · Sonnet 5.5</span>
+        <span className="status-pill green">
+          상위 검토 · {modelLabel(data?.orchestration?.supervisor_model)}
+        </span>
       </section>
       <p className="flow-description">
         무료 사진: {data?.media?.pexels ? "Pexels 연결" : "Pexels 미연결"} ·{" "}
@@ -1165,7 +1168,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
           "독자별 집필",
           "무료 사진 선정",
           "SEO·AEO·GEO 검증",
-          "상위 검토 · Sonnet 5.5",
+          "상위 검토 · " + modelLabel(data?.orchestration?.supervisor_model),
           "필요 시 보완 → 재검증",
           "승인된 글 임시 발행",
         ].map((s, i) => (
@@ -1324,11 +1327,23 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                           <strong>{label}</strong>
                           <small>
                             {["supervisor", "editor"].includes(agent)
-                              ? "Sonnet 5.5"
-                              : agent === "writer" ||
-                                  agent === "researcher" ||
-                                  agent === "verifier"
-                                ? "Haiku 4.5"
+                              ? modelLabel(
+                                  (step?.output_json
+                                    ? JSON.parse(step.output_json).model
+                                    : null) ||
+                                    data?.orchestration?.supervisor_model,
+                                )
+                              : ["writer", "researcher", "verifier"].includes(
+                                    agent,
+                                  )
+                                ? modelLabel(
+                                    (step?.output_json
+                                      ? JSON.parse(step.output_json).model
+                                      : null) ||
+                                      (step?.status === "complete"
+                                        ? "claude-haiku-4-5"
+                                        : data?.orchestration?.worker_model),
+                                  )
                                 : "서버 도구"}
                           </small>
                           <span>{status}</span>
@@ -1362,7 +1377,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                             }
                           </span>
                           <small>
-                            Sonnet 5.5 ·{" "}
+                            {modelLabel(decision.model)} ·{" "}
                             {new Date(decision.at).toLocaleTimeString("ko-KR", {
                               timeZone: "Asia/Seoul",
                             })}{" "}

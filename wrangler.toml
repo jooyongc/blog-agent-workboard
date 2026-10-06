@@ -5,6 +5,7 @@ compatibility_date = "2026-10-05"
 [vars]
 NATIVE_BLOG_SUPABASE_URL = "https://agkkvtfwqmzgbrqhvohs.supabase.co"
 AI_ENABLED = "true"
+AI_PROVIDER = "gemini"
 PUBLIC_WORKBOARD_URL = "https://blog-agent-workboard.pages.dev"
 KOREABYLOCAL_SITE_URL = "https://koreabylocal.com"
 KOREADECODE_SITE_URL = "https://koreadecode.com"
