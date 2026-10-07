@@ -391,7 +391,7 @@
       "min_score": 70,
       "required_images": 2,
       "affiliate_disclosure": "",
-      "source_domains": ["english.visitkorea.or.kr", "english.visitseoul.net"],
+      "source_domains": ["english.visitkorea.or.kr", "english.visitseoul.net", "english.seoul.go.kr", "sejonghakdang.org", "hansik.or.kr"],
       "audience": "Foreign visitors seeking local Korean experiences",
       "voice": "A local guide, concise and concrete; explain local terms and practical steps with official dated sources.",
       "pillars": [

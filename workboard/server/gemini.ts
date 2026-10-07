@@ -56,7 +56,7 @@ export async function requestGemini(
           parts: [
             {
               text:
-                system +
+                (domains?.length ? system.split("Return JSON")[0] + " Search phase only: paraphrase briefly in at most 250 words with citations. Do not copy source passages or output an article, JSON or code blocks." : system) +
                 (domains?.length
                   ? "\nYou MUST use Google Search before answering, never answer from memory. Search at most three queries using only these official domains: " +
                     domains.join(", ") +

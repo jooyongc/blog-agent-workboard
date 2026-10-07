@@ -1,0 +1,3 @@
+UPDATE workspace_records SET config_json=json_insert(config_json,'$.strategy.source_domains[#]','english.seoul.go.kr') WHERE site_id='koreabylocal' AND NOT EXISTS(SELECT 1 FROM json_each(config_json,'$.strategy.source_domains') WHERE value='english.seoul.go.kr');
+UPDATE workspace_records SET config_json=json_insert(config_json,'$.strategy.source_domains[#]','sejonghakdang.org') WHERE site_id='koreabylocal' AND NOT EXISTS(SELECT 1 FROM json_each(config_json,'$.strategy.source_domains') WHERE value='sejonghakdang.org');
+UPDATE workspace_records SET config_json=json_insert(config_json,'$.strategy.source_domains[#]','hansik.or.kr') WHERE site_id='koreabylocal' AND NOT EXISTS(SELECT 1 FROM json_each(config_json,'$.strategy.source_domains') WHERE value='hansik.or.kr');

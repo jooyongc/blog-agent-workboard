@@ -145,7 +145,7 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
       resume = true;
     if (
       task.status === "failed" &&
-      ["supervisor", "editor"].includes(stage) &&
+      ["researcher", "supervisor", "editor"].includes(stage) &&
       task.error?.includes("AI 답변이 완결") &&
       !(payload.response_retries >= 1)
     ) {
@@ -170,8 +170,8 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
         resume = true;
       }
     }
-    if(task.status === "failed" && stage === "researcher" && env.AI_PROVIDER === "gemini" && task.error?.includes("독립적인 출처") && !payload.grounding_recovery_v2) {
-      payload.grounding_recovery_v2 = true;
+    if(task.status === "failed" && stage === "researcher" && env.AI_PROVIDER === "gemini" && task.error?.includes("독립적인 출처") && !payload.grounding_recovery_v3) {
+      payload.grounding_recovery_v3 = true;
       resume = true;
     }
     if (task.status === "retry_wait")
@@ -674,7 +674,7 @@ export async function advanceHarness(env: Env) {
     }
     if (
       e instanceof IncompleteResponse &&
-      ["supervisor", "editor"].includes(task.stage) &&
+      ["researcher", "supervisor", "editor"].includes(task.stage) &&
       !(payload.response_retries >= 1)
     ) {
       payload.response_retries = (payload.response_retries || 0) + 1;
@@ -684,7 +684,7 @@ export async function advanceHarness(env: Env) {
         .bind(JSON.stringify(payload), new Date().toISOString(), task.job_id)
         .run();
       await env.WORKBOARD_DB.prepare(
-        "UPDATE agent_steps SET status='waiting',error='출력 길이 제한: 한 번 자동 복구합니다.',finished_at=? WHERE id=?",
+        "UPDATE agent_steps SET status='waiting',error='응답 미완결: 한 번 자동 복구합니다.',finished_at=? WHERE id=?",
       )
         .bind(new Date().toISOString(), step)
         .run();
