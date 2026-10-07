@@ -1732,3 +1732,14 @@ test("official source redirects are followed but outside-domain redirects are re
  const checked=validateSupervision(raw,w,input,research.briefs);
  assert.equal(checked.action,"edit");assert.equal(checked.claims[0].status,"unsupported");assert.ok(checked.instructions.includes("Remove or correct"));assert.ok(checked.instructions.includes(decision.claims[0].claim));assert.equal(checked.instructions.includes("No further edits required."),false);
  });
+
+ test("review preparation bounds editor metadata without changing facts or images", () => {
+ const fixture=supervisorFixture();
+ const article=fixture.input.translations.en;
+ const research=fixture.research;
+ const input={...article,meta_description:"Verified restaurant etiquette for visitors. ".repeat(8)};
+ const prepared=prepareForReview(input,research.briefs.en,"en");
+ assert.ok(prepared.meta_description.length<=160);
+ assert.ok(prepared.meta_description.startsWith("Verified restaurant etiquette"));
+ assert.deepEqual(prepared.images,input.images);
+ });

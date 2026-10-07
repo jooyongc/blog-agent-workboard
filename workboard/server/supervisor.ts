@@ -51,6 +51,12 @@ export function prepareForReview(
   lang: string,
 ): Article {
   let md = article.content_md;
+  let description = article.meta_description.trim();
+  if (description.length > 160) {
+    const prefix = description.slice(0, 159);
+    const boundary = prefix.lastIndexOf(" ");
+    description = prefix.slice(0, boundary >= 120 ? boundary : 159) + "…";
+  }
   const photos = article.images || [];
   for (const photo of photos) {
     md = md.replace(/!\[[^\]]*\]\((https:\/\/[^)]+)\)/g, (match, url) =>
@@ -84,7 +90,7 @@ export function prepareForReview(
         )
         .join("\n");
   }
-  const result = { ...article, content_md: md, images: [] };
+  const result = { ...article, meta_description: description, content_md: md, images: [] };
   return photos.length ? insertStockPhotos(result, photos) : result;
 }
 export function validateSupervision(
@@ -159,12 +165,14 @@ export function validateSupervision(
   if (raw.action === "edit" && !raw.instructions.trim())
     throw new HttpError(502, "보완 작업의 지시 내용이 없습니다.");
   const demoted = raw.action === "approve" && action === "edit";
+  const structureIssues = Object.fromEntries(w.languages.map(lang => [lang, quality(input.translations[lang], w, lang).issues]));
+  const unsupported = claims.filter((c:any)=>c.status!=="verified");
   const corrective = "The approval was rejected by evidence validation. Ignore any previous instruction saying no edits are needed. Remove or correct these unsupported or contradicted claims in every section, introduction, table and FAQ: " + JSON.stringify(claims.filter((c:any)=>c.status!=="verified").map((c:any)=>({lang:c.lang,claim:c.claim,source_url:c.source_url}))) + ". Only retain facts with exact supplied primary-source evidence. Preserve licensed reviewed images and unaffected prose. Restore structural checks and at least two distinct exact research URLs as visible links.";
   return {
     action,
     reason,
     instructions: (
-      (demoted ? corrective : raw.instructions.trim()) ||
+      (demoted ? corrective : raw.instructions.trim()) + (action === "edit" ? "\nMandatory server checks: " + JSON.stringify({structureIssues, unsupported}) : "") ||
       "Fix the structural checks and unsupported claims using only exact supplied evidence; delete claims without evidence and preserve supported content."
     ).slice(0, 6000),
     target_languages: raw.target_languages.length
