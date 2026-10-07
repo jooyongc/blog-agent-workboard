@@ -86,13 +86,22 @@ export type Article = {
   }[];
   images?: {
     id: string;
-    provider: "Pexels" | "Unsplash" | "Adobe Stock" | "Adobe Firefly";
+    provider:
+      "Pexels" | "Unsplash" | "Adobe Stock" | "Adobe Firefly" | "Gemini";
     url: string;
     page: string;
     photographer: string;
     photographer_url: string;
     alt: string;
     license_url: string;
+    visual_review?: {
+      approved: boolean;
+      reason: string;
+      model: string;
+      run_id: string;
+      sha256: string;
+      policy?: string;
+    };
   }[];
   title: string;
   meta_description: string;

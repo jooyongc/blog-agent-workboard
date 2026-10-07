@@ -94,6 +94,7 @@ export async function modelJson(
   maxTokens = 3500,
   search?: string[],
   model: ModelId = workerModel(env),
+  images?: { mimeType: string; data: string }[],
 ) {
   if (search?.length && model.startsWith("gemini-"))
     model = "gemini-3.1-flash-lite";
@@ -107,7 +108,9 @@ export async function modelJson(
     week = String(
       Math.floor((now + 9 * 3600000 - 4 * 86400000) / (7 * 86400000)),
     );
-  const bytes = new TextEncoder().encode(system + JSON.stringify(input)).length;
+  const bytes =
+    new TextEncoder().encode(system + JSON.stringify(input)).length +
+    (images?.length || 0) * 8192;
   const rates = modelRates(model, bytes);
   const reservation =
     (bytes * rates.input) / 1000000 +
@@ -152,7 +155,15 @@ export async function modelJson(
     settled = false;
   try {
     const res = gemini
-      ? await requestGemini(apiKey, model, system, input, maxTokens, search)
+      ? await requestGemini(
+          apiKey,
+          model,
+          system,
+          input,
+          maxTokens,
+          search,
+          images,
+        )
       : await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
           redirect: "manual",

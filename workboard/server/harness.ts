@@ -3,6 +3,7 @@ import type { DraftInput } from "../shared/types";
 import { workspace, readiness } from "./registry";
 import { research } from "./strategy";
 import { generate } from "./ai";
+import { generatedImagesReady } from "./generated-media";
 import { illustrate, approvedMedia } from "./media";
 import { verifyGenerated } from "./automation";
 import { quality } from "./seo";
@@ -345,20 +346,26 @@ export async function enqueueApproved(env: Env) {
 export async function advanceHarness(env: Env) {
   await recoverWorkflows(env);
   const reconnect = await env.WORKBOARD_DB.prepare(
-    "SELECT job_id,site_id,stage,error FROM agent_workflows WHERE status='failed' AND stage IN ('photo_editor','publisher')",
-  ).all<{ job_id: string; site_id: string; stage: string; error: string }>();
+    "SELECT job_id,site_id,stage,error,payload_json FROM agent_workflows WHERE status IN ('failed','media_wait') AND stage IN ('photo_editor','publisher') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted'))",
+  ).all<{
+    job_id: string;
+    site_id: string;
+    stage: string;
+    error: string;
+    payload_json: string;
+  }>();
   for (const task of reconnect.results) {
     const photoConnected =
       task.stage === "photo_editor" &&
-      task.error?.includes("PEXELS_API_KEY") &&
-      (env.PEXELS_API_KEY || env.UNSPLASH_ACCESS_KEY);
+      generatedImagesReady(env) &&
+      !JSON.parse(task.payload_json || "{}").auto_media_started;
     const deliveryConnected =
       task.stage === "publisher" &&
       task.error?.includes("사이트 연결 인증") &&
       (await readiness(await workspace(env, task.site_id), env)).ready;
     if (photoConnected || deliveryConnected)
       await env.WORKBOARD_DB.prepare(
-        "UPDATE agent_workflows SET status='pending',error=NULL,updated_at=? WHERE job_id=? AND status='failed'",
+        "UPDATE agent_workflows SET status='pending',error=NULL,updated_at=? WHERE job_id=? AND status IN ('failed','media_wait')",
       )
         .bind(new Date().toISOString(), task.job_id)
         .run();
@@ -370,6 +377,17 @@ export async function advanceHarness(env: Env) {
   )
     .bind(new Date().toISOString())
     .run();
+  if(env.MEDIA_POLICY === "adobe-generated" && generatedImagesReady(env)) {
+    const outdated=await env.WORKBOARD_DB.prepare("SELECT job_id,payload_json FROM agent_workflows WHERE status='pending' AND stage IN ('verifier','supervisor','publisher')").all<{job_id:string;payload_json:string}>();
+    for(const row of outdated.results) {
+      const payload=JSON.parse(row.payload_json);
+      if(payload.input && Object.values(payload.input.translations).some((article:any)=>!approvedMedia(article))) {
+        delete payload.supervisor_approval;
+        payload.supervisor_rounds=0;
+        await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET stage='photo_editor',payload_json=?,updated_at=? WHERE job_id=? AND status='pending'").bind(JSON.stringify(payload),new Date().toISOString(),row.job_id).run();
+      }
+    }
+  }
   const task = await env.WORKBOARD_DB.prepare(
     "SELECT * FROM agent_workflows WHERE status='pending' AND site_id NOT IN (SELECT site_id FROM workspace_records WHERE json_extract(config_json,'$.schedule.owner')='aside') ORDER BY updated_at LIMIT 1",
   ).first<{
@@ -454,6 +472,7 @@ export async function advanceHarness(env: Env) {
       } satisfies DraftInput;
     }
     if (task.stage === "photo_editor") {
+      if (generatedImagesReady(env)) payload.auto_media_started = true;
       if (
         w.languages.some(
           (l) =>
@@ -474,6 +493,7 @@ export async function advanceHarness(env: Env) {
     }
     if (
       task.stage === "photo_editor" &&
+      env.MEDIA_POLICY !== "adobe-generated" &&
       w.strategy.media_mode === "hybrid" &&
       fireflyReady(env)
     ) {
@@ -775,13 +795,40 @@ export async function advanceHarness(env: Env) {
         recovering: true,
       };
     }
-    if(task.stage === "photo_editor" && e instanceof HttpError && e.message.includes("MEDIA_REVIEW")) {
-      const error = "이미지 확보 대기: 한국 배경과 주제에 맞는 라이선스 이미지 또는 생성 이미지가 필요합니다. 자료가 준비되면 이 단계부터 자동 재개합니다.";
-      await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET status='media_wait',error=?,payload_json=?,lease_until=NULL,updated_at=? WHERE job_id=?").bind(error,JSON.stringify(payload),new Date().toISOString(),task.job_id).run();
-      await env.WORKBOARD_DB.prepare("UPDATE agent_steps SET status='waiting',error=?,finished_at=? WHERE id=?").bind(error,new Date().toISOString(),step).run();
-      if(payload.input) await saveProgress(env,task.job_id,payload,"media_wait");
-      await env.WORKBOARD_DB.prepare("UPDATE content_jobs SET status='media_wait',error=?,updated_at=? WHERE id=?").bind(error,new Date().toISOString(),task.job_id).run();
-      return {worked:true,job_id:task.job_id,agent:task.stage,waiting:true,delay_seconds:900};
+    if (
+      task.stage === "photo_editor" &&
+      e instanceof HttpError &&
+      e.message.includes("MEDIA_REVIEW")
+    ) {
+      const error = "이미지 확보 대기: " + e.message.replace("MEDIA_REVIEW: ","") + " 원본을 등록하면 이 단계부터 자동 재개합니다.";
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE agent_workflows SET status='media_wait',error=?,payload_json=?,lease_until=NULL,updated_at=? WHERE job_id=?",
+      )
+        .bind(
+          error,
+          JSON.stringify(payload),
+          new Date().toISOString(),
+          task.job_id,
+        )
+        .run();
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE agent_steps SET status='waiting',error=?,finished_at=? WHERE id=?",
+      )
+        .bind(error, new Date().toISOString(), step)
+        .run();
+      if (payload.input)
+        await saveProgress(env, task.job_id, payload, "media_wait");
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE content_jobs SET status='media_wait',error=?,updated_at=? WHERE id=?",
+      )
+        .bind(error, new Date().toISOString(), task.job_id)
+        .run();
+      return {
+        worked: true,
+        job_id: task.job_id,
+        agent: task.stage,
+        media_wait: true,
+      };
     }
     if (e instanceof PendingMedia) {
       await env.WORKBOARD_DB.prepare(

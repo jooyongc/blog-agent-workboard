@@ -1,5 +1,6 @@
 export type Env = {
   MEDIA_POLICY?: string;
+  GEMINI_IMAGES_ENABLED?: string;
   [name: string]: unknown;
   SCHEDULER_TOKEN?: string;
   CONNECTION_SECRET?: string;

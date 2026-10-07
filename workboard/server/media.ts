@@ -1,17 +1,31 @@
 import type { Env } from "./env";
 import type { Workspace, Article } from "../shared/types";
-import { creativeAsset, fireflyReady } from "./firefly";
+import {
+  VISUAL_POLICY,
+  generatedImagesReady,
+  generatedPhoto,
+  reviewPhoto,
+} from "./generated-media";
+import { creativeAsset, fireflyReady, PendingMedia } from "./firefly";
 import { HttpError } from "./http";
 import library from "../shared/licensed-media.json";
 export type StockPhoto = {
   id: string;
-  provider: "Pexels" | "Unsplash" | "Adobe Stock" | "Adobe Firefly";
+  provider: "Pexels" | "Unsplash" | "Adobe Stock" | "Adobe Firefly" | "Gemini";
   url: string;
   page: string;
   photographer: string;
   photographer_url: string;
   alt: string;
   license_url: string;
+  visual_review?: {
+    approved: boolean;
+    reason: string;
+    model: string;
+    run_id: string;
+    sha256: string;
+    policy?: string;
+  };
 };
 export function koreanMedia(description: string) {
   return (
@@ -30,9 +44,11 @@ export function approvedMedia(article: Article) {
     inline.length >= 2 &&
     images.every(
       (p) =>
-        ["Adobe Stock", "Adobe Firefly"].includes(p.provider) &&
+        ["Adobe Stock", "Adobe Firefly", "Gemini"].includes(p.provider) &&
         koreanMedia(p.alt) &&
         !!p.license_url &&
+        p.visual_review?.approved === true && p.visual_review.policy === VISUAL_POLICY &&
+        /^[a-f0-9]{64}$/.test(p.visual_review.sha256) &&
         article.content_md.includes(p.url),
     ) &&
     inline.every((url) => images.some((p) => p.url === url))
@@ -61,7 +77,7 @@ export async function stockPhotos(
       ).results
         .filter(
           (x) =>
-            ["Adobe Stock", "Adobe Firefly"].includes(x.provider) &&
+            ["Adobe Stock", "Adobe Firefly", "Gemini"].includes(x.provider) &&
             koreanMedia(x.title + " " + x.tags_json),
         )
         .filter((x) =>
@@ -98,6 +114,7 @@ export async function stockPhotos(
       alt: x.alt,
       license_url: "https://stock.adobe.com/license-terms",
     }));
+  if (count === 0) return [...uploaded, ...adobe];
   if (uploaded.length + adobe.length >= count)
     return [...uploaded, ...adobe].slice(0, count);
   throw new HttpError(
@@ -155,7 +172,7 @@ export function insertStockPhotos(
         )
       ];
     blocks[target] +=
-      `\n\n![${clean(photo.alt)}](${photo.url})\n\n${photo.provider === "Adobe Firefly" ? "*AI-generated with Adobe Firefly. Not documentary evidence.*" : `*Photo: [${clean(photo.photographer)} / ${photo.provider}](${photo.page}). Context illustration.*`}\n\n`;
+      `\n\n![${clean(photo.alt)}](${photo.url})\n\n${["Adobe Firefly", "Gemini"].includes(photo.provider) ? `*AI-generated illustration (${photo.provider}). Not documentary evidence.*` : `*Photo: [${clean(photo.photographer)} / ${photo.provider}](${photo.page}). Context illustration.*`}\n\n`;
   });
   return { ...article, content_md: blocks.join(""), images: selected };
 }
@@ -169,7 +186,7 @@ export async function illustrate(
   for (const article of Object.values(result)) {
     const rejected = (article.images || []).filter(
       (p) =>
-        !["Adobe Stock", "Adobe Firefly"].includes(p.provider) ||
+        !["Adobe Stock", "Adobe Firefly", "Gemini"].includes(p.provider) ||
         !koreanMedia(p.alt),
     );
     for (const photo of rejected) {
@@ -191,41 +208,78 @@ export async function illustrate(
   }
   const first = result[w.languages[0]];
   const query = first.primary_keyword || first.title;
-  let photos: StockPhoto[];
-  try {
-    photos = await stockPhotos(
+  const count = Math.max(2, Math.min(4, w.strategy.required_images));
+  const candidates = await stockPhotos(env, query, 0, w.site_id);
+  const photos: StockPhoto[] = [];
+  for (const candidate of candidates) {
+    const checked = await reviewPhoto(
       env,
-      query,
-      Math.max(2, Math.min(4, w.strategy.required_images)),
       w.site_id,
+      slug,
+      first.title,
+      candidate,
     );
-  } catch (error) {
-    if (!fireflyReady(env)) throw error;
-    photos = [];
-    for (
-      let i = 0;
-      i < Math.max(2, Math.min(4, w.strategy.required_images));
-      i++
-    ) {
-      const prompt = `Editorial illustration for ${first.title}. South Korea only, Korean cultural and architectural context, no Japanese imagery, flags, logos or invented documentary claims. ${i % 2 === 0 ? "Wide overview scene" : "Close-up detail illustrating the practical topic"}. No text. Illustrative, not a photograph of a verified place.`;
+    if (
+      checked.visual_review?.approved &&
+      !photos.some((p) => p.url === checked.url)
+    )
+      photos.push(checked);
+    if (photos.length >= count) break;
+  }
+  for (let i = photos.length; i < count; i++) {
+    if (generatedImagesReady(env)) {
+      const {fresh,...photo}=await generatedPhoto(env, w.site_id, slug, first.title, i);
+      photos.push(photo);
+      if(fresh && i<count-1) throw new PendingMedia("첫 이미지의 생성·검토를 저장했습니다. 다음 이미지를 이어서 준비합니다.");
+    } else if (fireflyReady(env)) {
       const asset = await creativeAsset(
         env,
         `${w.site_id}-${slug}-approved-image-${i}`,
         w.site_id,
         "image",
-        prompt,
+        `South Korean conceptual editorial illustration for ${first.title}. ${i % 2 ? "Close-up practical detail" : "Wide overview scene"}. No Japanese cultural elements, named real places, logos or readable text.`,
       );
-      photos.push({
+      const checked = await reviewPhoto(env, w.site_id, slug, first.title, {
         id: `${slug}-${i}`,
         provider: "Adobe Firefly",
         url: asset.url,
         page: "https://www.adobe.com/products/firefly.html",
         photographer: "Adobe Firefly",
         photographer_url: "https://www.adobe.com/products/firefly.html",
-        alt: `South Korean editorial illustration: ${first.title} (${i + 1})`,
+        alt: `South Korean conceptual illustration: ${first.title}`,
         license_url: "https://www.adobe.com/legal/terms.html",
       });
+      if (!checked.visual_review?.approved)
+        throw new HttpError(
+          409,
+          "MEDIA_REVIEW: 생성 이미지가 적합성 검토를 통과하지 못했습니다.",
+        );
+      photos.push(checked);
+    } else
+      throw new HttpError(
+        409,
+        "MEDIA_REVIEW: 주제에 맞는 Adobe 원본 등록 또는 자동 이미지 생성 연결이 필요합니다.",
+      );
+  }
+  // Replace former assets as a unit; avoid silently retaining an unrelated image.
+  for (const article of Object.values(result)) {
+    for (const old of article.images || []) {
+      article.content_md = article.content_md.replace(
+        /!\[[^\]]*\]\((https:\/\/[^)]+)\)/g,
+        (match, url) => (url === old.url ? "" : match),
+      );
+      article.content_md = article.content_md
+        .split("\n")
+        .filter(
+          (line) =>
+            !(
+              line.includes(old.page) &&
+              /Photo:|AI-generated|写真|Credit/i.test(line)
+            ),
+        )
+        .join("\n");
     }
+    article.images = [];
   }
   for (const lang of w.languages)
     result[lang] = insertStockPhotos(result[lang], photos);

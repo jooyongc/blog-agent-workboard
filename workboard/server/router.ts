@@ -33,6 +33,7 @@ import {
   budgetUsage,
   budgetExamples,
 } from "./budget";
+import { generatedImagesReady } from "./generated-media";
 import { budgetReset, workerModel, reviewModel, editorModel } from "./model";
 export async function onRequest({
   request,
@@ -513,7 +514,9 @@ export async function onRequest({
           unsplash: !!env.UNSPLASH_ACCESS_KEY,
           adobe_stock: true,
           firefly: fireflyReady(env),
+          gemini_images: generatedImagesReady(env),
         },
+        media_assets: (await env.WORKBOARD_DB.prepare("SELECT result_json FROM creative_requests WHERE site_id=? AND kind='image' AND status='complete' AND json_extract(result_json,'$.visual_review.approved')=1 AND json_extract(result_json,'$.visual_review.policy')='korea-topic-no-text-v2' ORDER BY created_at DESC LIMIT 30").bind(id).all<{result_json:string}>()).results.map(row=>JSON.parse(row.result_json)),
         jobs: await jobs(env, id),
         runs: r.results,
         workflows: (
@@ -654,7 +657,11 @@ export async function onRequest({
             ? env.GEMINI_API_KEY
             : env.ANTHROPIC_API_KEY),
         ai_provider: env.AI_PROVIDER === "gemini" ? "gemini" : "anthropic",
-        ai_models: { worker: workerModel(env), editor: editorModel(env), supervisor: reviewModel(env) },
+        ai_models: {
+          worker: workerModel(env),
+          editor: editorModel(env),
+          supervisor: reviewModel(env),
+        },
         database_ready: !!env.WORKBOARD_DB,
         workspaces: await Promise.all(catalog.map((w) => readiness(w, env))),
         scheduler: "blog-agent-workboard-scheduler",

@@ -637,7 +637,9 @@ export function WorkspaceManager({ active, workspaces, refresh }: Props) {
                   })
                 }
               />
-              {editing.schedule.owner === "aside" ? "Aside 정기 발행 사용 · Cloudflare 전송 중지" : "자동 발행 사용"}
+              {editing.schedule.owner === "aside"
+                ? "Aside 정기 발행 사용 · Cloudflare 전송 중지"
+                : "자동 발행 사용"}
             </label>
             <label className="review-checkbox">
               <input
@@ -1159,8 +1161,10 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
       </section>
       <p className="flow-description">
         이미지 정책: 한국 배경·주제에 맞는 Adobe Stock 또는 직접 생성 이미지 ·
-        Firefly: {data?.media?.firefly ? "연결됨" : "API 이용 권한 연결 대기"} ·
-        부적합한 이미지가 있으면 발행을 멈춥니다.
+        Gemini 자동 생성:{" "}
+        {data?.media?.gemini_images ? "연결됨 · Pro 이미지 검토" : "연결 대기"}{" "}
+        · Firefly: {data?.media?.firefly ? "연결됨" : "API 이용 권한 연결 대기"}{" "}
+        · 부적합한 이미지가 있으면 발행을 멈춥니다.
       </p>
       <div className="workflow-guide">
         {[
@@ -1184,7 +1188,11 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
           <span
             className={`status-pill ${active.schedule.enabled ? "green" : "neutral"}`}
           >
-            {active.schedule.owner === "aside" ? "Aside 정기 발행" : active.schedule.enabled ? "자동 발행 켜짐" : "자동 발행 꺼짐"}
+            {active.schedule.owner === "aside"
+              ? "Aside 정기 발행"
+              : active.schedule.enabled
+                ? "자동 발행 켜짐"
+                : "자동 발행 꺼짐"}
           </span>
         </div>
         <div className="form-body">
@@ -1196,7 +1204,12 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
               ? "공개 발행"
               : "원격 초안 저장"}
           </p>
-          {active.schedule.owner === "aside" && <p>발행 일정과 실행은 기존 Aside 루틴에서 관리합니다. 아래 Cloudflare 예약 정보는 실행되지 않습니다.</p>}
+          {active.schedule.owner === "aside" && (
+            <p>
+              발행 일정과 실행은 기존 Aside 루틴에서 관리합니다. 아래 Cloudflare
+              예약 정보는 실행되지 않습니다.
+            </p>
+          )}
           <p>
             다음 실행:{" "}
             {active.schedule.next_run
@@ -1284,6 +1297,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                     )[j.status] ?? j.status}
                   </span>
                   <h3>{j.title}</h3>
+                  {data.media_assets?.some((photo:any)=>photo.id.startsWith(`${active.site_id}-${j.slug}-gemini-image-`)) && <div className="grid grid-cols-2 gap-3">{data.media_assets.filter((photo:any)=>photo.id.startsWith(`${active.site_id}-${j.slug}-gemini-image-`)).map((photo:any)=><figure key={photo.id}><img src={photo.url} alt={photo.alt} loading="lazy" style={{width:"100%",aspectRatio:"16/9",objectFit:"cover",borderRadius:12}}/><figcaption>AI 삽화 · Pro 검토 완료</figcaption></figure>)}</div>}
                   <p>
                     {j.publish_at
                       ? new Date(j.publish_at).toLocaleString("ko-KR", {
@@ -1333,7 +1347,9 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                                   (step?.output_json
                                     ? JSON.parse(step.output_json).model
                                     : null) ||
-                                    (agent === "editor" ? data?.orchestration?.editor_model : data?.orchestration?.supervisor_model),
+                                    (agent === "editor"
+                                      ? data?.orchestration?.editor_model
+                                      : data?.orchestration?.supervisor_model),
                                 )
                               : ["writer", "researcher", "verifier"].includes(
                                     agent,
@@ -1428,7 +1444,12 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                     </ol>
                   </details>
                   {j.error && <p role="alert">{j.error}</p>}
-                  {j.status === "media_wait" && <p>출처 조사와 글 작성은 저장돼 있습니다. 아래 미디어 등록에 주제와 맞는 원본을 올리면 사진 선정부터 이어집니다.</p>}
+                  {j.status === "media_wait" && (
+                    <p>
+                      출처 조사와 글 작성은 저장돼 있습니다. 아래 미디어 등록에
+                      주제와 맞는 원본을 올리면 사진 선정부터 이어집니다.
+                    </p>
+                  )}
                   {recovery?.retry_at && (
                     <p>
                       자동 재개 예정:{" "}
@@ -1714,7 +1735,9 @@ function MediaLibrary({ active }: Pick<Props, "active">) {
       <summary>Adobe 웹 생성물·라이선스 미디어 등록</summary>
       <p className="flow-description">
         Firefly 웹에서 만든 이미지·영상 또는 라이선스를 확보한 Adobe Stock
-        원본을 저장해 에이전트가 재사용할 수 있습니다.
+        원본을 저장해 에이전트가 재사용할 수 있습니다. 자료가 부족하면 Gemini로
+        생성하고 Pro가 실제 이미지를 검사합니다. 비용은 사이트별 AI 예산에
+        포함되며, 생성 이미지는 AI 삽화로 표시됩니다.
       </p>
       <form onSubmit={(e) => void upload(e)}>
         <label className="field-label">

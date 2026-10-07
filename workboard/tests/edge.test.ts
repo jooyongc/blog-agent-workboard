@@ -1,3 +1,4 @@
+import {generatedPhoto,reviewPhoto,imageCost,assertReviewedPhotos} from "../server/generated-media";
 import { test } from "node:test";
 import { parseGemini } from "../server/gemini";
 import { workerModel, reviewModel, editorModel } from "../server/model";
@@ -1676,4 +1677,42 @@ test("official source redirects are followed but outside-domain redirects are re
  d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,error,created_at,updated_at) VALUES('research-length','topic',?,'writer','failed',?,'EN 출처 메모를 30자 이상 입력해 주세요.','now','now')").run(w.site_id,JSON.stringify(payload));
  await recoverWorkflows(env);const state=d.sqlite.prepare("SELECT status,stage,payload_json FROM agent_workflows").get() as any;
  assert.equal(state.status,"pending");assert.equal(state.stage,"writer");assert.equal(JSON.parse(state.payload_json).research.research.en.length,35165);
+ });
+
+ test("generated media is metered, visually reviewed, cached and checked again before delivery", async () => {
+ const {env,d}=environment();Object.assign(env,{AI_ENABLED:"true",AI_PROVIDER:"gemini",GEMINI_IMAGES_ENABLED:"true",GEMINI_API_KEY:"test",NATIVE_BLOG_SUPABASE_URL:"https://test.supabase.co",NATIVE_BLOG_SUPABASE_KEY:"test"});
+ const old=globalThis.fetch;let generates=0,audits=0;let pixels=new Uint8Array([137,80,78,71,13,10,26,10]);
+ globalThis.fetch=async(url,init)=>{
+   if(String(url).includes("gemini-3.1-flash-image:")) {const config=JSON.parse(String(init?.body)).generationConfig.imageConfig;assert.equal(config.aspectRatio,"16:9");assert.equal(config.imageSize,"1K");generates++;return Response.json({candidates:[{content:{parts:[{inlineData:{mimeType:"image/png",data:btoa(String.fromCharCode(...pixels))}}]}}],usageMetadata:{promptTokenCount:100,candidatesTokensDetails:[{modality:"IMAGE",tokenCount:1120}]}});}
+   if(String(url).includes("gemini-3.1-pro-preview:")) {audits++;const request=JSON.parse(String(init?.body));assert.equal(request.contents[0].parts[1].inlineData.mimeType,"image/png");return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify({approved:true,reason:"한국 주제에 적합한 삽화"})}]}}],usageMetadata:{promptTokenCount:100, candidatesTokenCount:30}});}
+   if(init?.method==="POST") return new Response("",{status:200});
+   return new Response(pixels,{headers:{"Content-Type":"image/png"}});
+ };
+ try {
+   const first=await generatedPhoto(env,"koreabylocal","image-test","Korean restaurant ordering",0);
+   const again=await generatedPhoto(env,"koreabylocal","image-test","Korean restaurant ordering",0);
+   assert.equal(first.url,again.url);assert.equal(generates,1);assert.equal(audits,1);assert.ok(first.visual_review?.approved);assert.match(first.visual_review!.sha256,/^[a-f0-9]{64}$/);
+   const runs=d.sqlite.prepare("SELECT model,actual FROM ai_runs ORDER BY created_at").all() as any[];assert.equal(runs.length,2);assert.ok(runs.some(run=>run.model==="gemini-3.1-flash-image" && run.actual>0.067));
+   await assertReviewedPhotos(env,[first]);pixels=new Uint8Array([1,2,3]);await assert.rejects(()=>assertReviewedPhotos(env,[first]),/이미지가 변경/);
+ }finally {globalThis.fetch=old;}
+ });
+ test("image budget exhaustion blocks provider calls and creates no unfinished generation", async () => {
+ const {env,d}=environment();Object.assign(env,{AI_ENABLED:"true",AI_PROVIDER:"gemini",GEMINI_IMAGES_ENABLED:"true",GEMINI_API_KEY:"test",NATIVE_BLOG_SUPABASE_URL:"https://test.supabase.co",NATIVE_BLOG_SUPABASE_KEY:"test"});
+ d.sqlite.prepare("UPDATE workspace_budget_settings SET article=0 WHERE site_id='koreabylocal'").run();let calls=0;const old=globalThis.fetch;globalThis.fetch=async()=>{calls++;throw Error("Must not charge");};
+ try {await assert.rejects(()=>generatedPhoto(env,"koreabylocal","image-budget","Korean restaurant",0),BudgetWait);assert.equal(calls,0);assert.equal((d.sqlite.prepare("SELECT COUNT(*) AS n FROM creative_requests").get() as any).n,0);}finally{globalThis.fetch=old;}
+ });
+ test("licensed Adobe uploads receive the same actual-pixel review without image generation", async () => {
+ const {env}=environment();Object.assign(env,{AI_ENABLED:"true",AI_PROVIDER:"gemini",GEMINI_API_KEY:"test",NATIVE_BLOG_SUPABASE_URL:"https://test.supabase.co"});let generated=false;const old=globalThis.fetch;
+ globalThis.fetch=async(url)=>{if(String(url).includes("generativelanguage")){generated=String(url).includes("flash-image");return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{text:'{"approved":true,"reason":"주제와 배경이 맞음"}'}]}}],usageMetadata:{promptTokenCount:100,candidatesTokenCount:30}});}return new Response(new Uint8Array([1,2,3]),{headers:{"Content-Type":"image/jpeg"}});};
+ try {const checked=await reviewPhoto(env,"koreabylocal","stock-test","Seoul subway",{id:"licensed-one",provider:"Adobe Stock",url:"https://test.supabase.co/storage/v1/object/public/workboard-media/adobe/one.jpg",page:"https://stock.adobe.com/images/one",photographer:"Author",photographer_url:"https://stock.adobe.com",alt:"Seoul Korean subway",license_url:"https://stock.adobe.com/license-terms"});assert.equal(checked.visual_review?.approved,true);assert.equal(generated,false);}finally{globalThis.fetch=old;}
+ });
+
+ test("missing assets wait without delaying unrelated queue jobs", async () => {
+ const {env,d}=environment();const {w,input}=supervisorFixture();input.translations.en.images=[];
+ const payload={slug:input.slug,title:input.translations.en.title,category:input.category,input};
+ d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('media-wait-test',?,?,?,?,'{}','agent_pending','now','now')").run(w.site_id,input.slug,input.translations.en.title,input.category);
+ d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES('media-wait-test','topic',?,'photo_editor','pending',?,'now','now')").run(w.site_id,JSON.stringify(payload));
+ const result=await advanceHarness(env) as any;
+ assert.equal(result.worked,true);assert.equal(result.waiting,undefined);
+ assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows WHERE job_id='media-wait-test'").get() as any).status,"media_wait");
  });

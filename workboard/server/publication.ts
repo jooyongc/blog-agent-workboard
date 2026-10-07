@@ -1,3 +1,4 @@
+import { assertReviewedPhotos } from "./generated-media";
 import { approvedMedia } from "./media";
 import type { Env } from "./env";
 import type { Workspace, DraftInput } from "../shared/types";
@@ -103,6 +104,11 @@ export async function publishJob(
     throw new HttpError(
       409,
       "MEDIA_REVIEW: 한국 배경에 맞는 Adobe Stock·직접 생성 이미지 2장 이상으로 교체해야 합니다.",
+    );
+  if (env.MEDIA_POLICY === "adobe-generated")
+    await assertReviewedPhotos(
+      env,
+      w.languages.flatMap((lang) => input.translations[lang].images || []),
     );
   const date = new Date().toISOString();
   if (w.integration === "blogger") {

@@ -41,6 +41,7 @@ export async function requestGemini(
   input: unknown,
   maxTokens: number,
   domains?: string[],
+  images?: { mimeType: string; data: string }[],
 ) {
   return fetch(
     "https://generativelanguage.googleapis.com/v1beta/models/" +
@@ -56,7 +57,10 @@ export async function requestGemini(
           parts: [
             {
               text:
-                (domains?.length ? system.split("Return JSON")[0] + " Search phase only: paraphrase briefly in at most 250 words with citations. Do not copy source passages or output an article, JSON or code blocks." : system) +
+                (domains?.length
+                  ? system.split("Return JSON")[0] +
+                    " Search phase only: paraphrase briefly in at most 250 words with citations. Do not copy source passages or output an article, JSON or code blocks."
+                  : system) +
                 (domains?.length
                   ? "\nYou MUST use Google Search before answering, never answer from memory. Search at most three queries using only these official domains: " +
                     domains.join(", ") +
@@ -65,7 +69,15 @@ export async function requestGemini(
             },
           ],
         },
-        contents: [{ role: "user", parts: [{ text: JSON.stringify(input) }] }],
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: JSON.stringify(input) },
+              ...(images || []).map((inlineData) => ({ inlineData })),
+            ],
+          },
+        ],
         generationConfig: {
           temperature: 0.2,
           maxOutputTokens: maxTokens,
@@ -133,15 +145,33 @@ export async function parseGemini(
         if (!claims.length) return [];
         try {
           let target = link.resolved;
-          let page = await fetch(target, {redirect:"manual",signal:AbortSignal.timeout(15000)});
-          for(let hop=0; hop<4 && page.status>=300 && page.status<400; hop++) {
+          let page = await fetch(target, {
+            redirect: "manual",
+            signal: AbortSignal.timeout(15000),
+          });
+          for (
+            let hop = 0;
+            hop < 4 && page.status >= 300 && page.status < 400;
+            hop++
+          ) {
             const location = page.headers.get("Location");
             await page.body?.cancel();
-            if(!location) return [];
-            const next = new URL(location,target);
-            if(next.protocol!=="https:" || next.username || next.password || !domains.some(d=>next.hostname===d || next.hostname.endsWith("."+d))) return [];
-            target=next.href;
-            page=await fetch(target,{redirect:"manual",signal:AbortSignal.timeout(15000)});
+            if (!location) return [];
+            const next = new URL(location, target);
+            if (
+              next.protocol !== "https:" ||
+              next.username ||
+              next.password ||
+              !domains.some(
+                (d) => next.hostname === d || next.hostname.endsWith("." + d),
+              )
+            )
+              return [];
+            target = next.href;
+            page = await fetch(target, {
+              redirect: "manual",
+              signal: AbortSignal.timeout(15000),
+            });
           }
           if (
             !page.ok ||
