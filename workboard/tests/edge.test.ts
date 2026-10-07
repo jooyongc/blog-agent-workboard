@@ -1743,3 +1743,10 @@ test("official source redirects are followed but outside-domain redirects are re
  assert.ok(prepared.meta_description.startsWith("Verified restaurant etiquette"));
  assert.deepEqual(prepared.images,input.images);
  });
+
+test("question headings mentioning sources count as editorial sections", () => {
+ const {w,input}=supervisorFixture();
+ const a={...input.translations.en,content_md:input.translations.en.content_md.replace("## What are the hours?","## What do the official sources say?")};
+ assert.equal(quality(a,w,"en").signals.question_h2_count,3);
+ assert.equal(quality(a,w,"en").passed,true);
+});

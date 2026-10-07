@@ -43,7 +43,7 @@ export function quality(article: Article, w: Workspace, lang: string): Quality {
       ?.trim() ?? "";
   const main = headings.filter(
     (h) =>
-      !/(Quick Answer|Frequently Asked|FAQ|よくある|簡易回答|要点|即答|Sources|References)/i.test(
+      !/^(?:Quick Answer|Frequently Asked(?: Questions)?|FAQ|よくある.*|簡易回答|要点|即答|Sources|References)\s*$/i.test(
         h,
       ),
   );
