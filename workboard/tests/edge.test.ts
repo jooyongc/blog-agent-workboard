@@ -1725,3 +1725,10 @@ test("official source redirects are followed but outside-domain redirects are re
  const old=globalThis.fetch;let gets=0,uploads=0;globalThis.fetch=async(url,init)=>{if(init?.method==="POST"){uploads++;assert.ok(String(url).includes("test.supabase.co/storage"));return new Response("",{status:200});}gets++;return new Response(new Uint8Array([1,2,3]),{headers:{"Content-Type":"image/jpeg"}});};
  try {assert.equal(await importLicensedMedia(env),true);assert.equal(await importLicensedMedia(env),false);assert.equal(gets,1);assert.equal(uploads,1);const row=d.sqlite.prepare("SELECT status,download_url FROM media_imports").get() as any;assert.equal(row.status,"complete");assert.equal(row.download_url,"");assert.equal((d.sqlite.prepare("SELECT provider FROM reusable_media").get() as any).provider,"Adobe Stock");}finally{globalThis.fetch=old;}
  });
+
+ test("evidence-demoted approval replaces contradictory no-edit instructions", () => {
+ const {w,input,research,decision}=supervisorFixture();
+ const raw={...decision,instructions:"No further edits required.",claims:[{...decision.claims[0],evidence_quote:"This quotation does not exist in the supplied source"}]};
+ const checked=validateSupervision(raw,w,input,research.briefs);
+ assert.equal(checked.action,"edit");assert.equal(checked.claims[0].status,"unsupported");assert.ok(checked.instructions.includes("Remove or correct"));assert.ok(checked.instructions.includes(decision.claims[0].claim));assert.equal(checked.instructions.includes("No further edits required."),false);
+ });

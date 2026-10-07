@@ -158,11 +158,13 @@ export function validateSupervision(
   }
   if (raw.action === "edit" && !raw.instructions.trim())
     throw new HttpError(502, "보완 작업의 지시 내용이 없습니다.");
+  const demoted = raw.action === "approve" && action === "edit";
+  const corrective = "The approval was rejected by evidence validation. Ignore any previous instruction saying no edits are needed. Remove or correct these unsupported or contradicted claims in every section, introduction, table and FAQ: " + JSON.stringify(claims.filter((c:any)=>c.status!=="verified").map((c:any)=>({lang:c.lang,claim:c.claim,source_url:c.source_url}))) + ". Only retain facts with exact supplied primary-source evidence. Preserve licensed reviewed images and unaffected prose. Restore structural checks and at least two distinct exact research URLs as visible links.";
   return {
     action,
     reason,
     instructions: (
-      raw.instructions.trim() ||
+      (demoted ? corrective : raw.instructions.trim()) ||
       "Fix the structural checks and unsupported claims using only exact supplied evidence; delete claims without evidence and preserve supported content."
     ).slice(0, 6000),
     target_languages: raw.target_languages.length
@@ -176,9 +178,9 @@ function compactArticle(article: Article) {
     title: article.title,
     meta_description: article.meta_description,
     content_md: article.content_md
-      .replace(/!\[[^\]]*\]\(https:\/\/[^)]+\)/g, "[Licensed contextual image]")
+      .replace(/!\[[^\]]*\]\(https:\/\/[^)]+\)/g, "[Reviewed contextual image]")
       .split("\n")
-      .filter((line) => !line.trim().startsWith("*Photo:"))
+      .filter((line) => !/^\*(Photo:|AI-generated)/.test(line.trim()))
       .join("\n"),
   };
 }

@@ -300,6 +300,14 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
       payload.review_budget_sizing_v2 = true;
       resume = true;
     }
+    const rejectedApproval=payload.supervision?.at(-1);
+    if(task.status === "failed" && stage === "supervisor" && !payload.invalid_approval_instruction_recovery && rejectedApproval?.action === "edit" && /no further edits|no edits required/i.test(rejectedApproval.instructions || "") && rejectedApproval.claims?.some((c:any)=>c.status!=="verified")) {
+      rejectedApproval.instructions="Remove these unsupported claims everywhere, including introduction, body, tables and FAQ: " + JSON.stringify(rejectedApproval.claims.filter((c:any)=>c.status!=="verified").map((c:any)=>({lang:c.lang,claim:c.claim,source_url:c.source_url}))) + ". Do not follow the stale no-edit instruction. Preserve reviewed images and retain only facts backed by exact supplied evidence.";
+      payload.invalid_approval_instruction_recovery=true;
+      payload.supervisor_rounds=MAX_SUPERVISOR_ROUNDS-1;
+      delete payload.supervisor_approval;
+      stage="editor";resume=true;
+    }
     if (!resume) continue;
     delete payload.recovery;
     const changed = await env.WORKBOARD_DB.prepare(
