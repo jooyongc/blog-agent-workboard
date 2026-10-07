@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import { parseGemini } from "../server/gemini";
-import { workerModel, reviewModel } from "../server/model";
+import { workerModel, reviewModel, editorModel } from "../server/model";
 import { getPosts } from "../server/content";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -1569,10 +1569,10 @@ test("an existing public original becomes a private correction draft without dup
 
 test("Gemini runs without Anthropic and accounts for thinking and cached tokens", async () => {
   const {env,d}=environment();env.AI_PROVIDER="gemini";env.GEMINI_API_KEY="test-google-key";
-  assert.equal(workerModel(env),"gemini-3.6-flash");assert.equal(reviewModel(env),"gemini-3.1-pro-preview");
+  assert.equal(workerModel(env),"gemini-3.1-flash-lite");assert.equal(reviewModel(env),"gemini-3.1-pro-preview");
   const original=globalThis.fetch;
   globalThis.fetch=async(url,init)=>{
-    assert.ok(String(url).endsWith("gemini-3.6-flash:generateContent"));
+    assert.ok(String(url).endsWith("gemini-3.1-flash-lite:generateContent"));
     assert.ok(!String(url).includes("test-google-key"));
     assert.equal((init?.headers as Record<string,string>)["x-goog-api-key"],"test-google-key");
     const body=JSON.parse(String(init?.body));assert.equal(body.generationConfig.responseMimeType,"application/json");
@@ -1580,8 +1580,8 @@ test("Gemini runs without Anthropic and accounts for thinking and cached tokens"
   };
   try {
     const result=await modelJson(env,"koreadecode/gemini-price","system",{},2000);
-    assert.deepEqual(result.data,{ok:true});assert.ok(Math.abs(result.cost_usd-0.0025575)<1e-10);
-    assert.equal((d.sqlite.prepare("SELECT model FROM ai_runs").get() as any).model,"gemini-3.6-flash");
+    assert.deepEqual(result.data,{ok:true});assert.ok(Math.abs(result.cost_usd-0.0009775)<1e-10);
+    assert.equal((d.sqlite.prepare("SELECT model FROM ai_runs").get() as any).model,"gemini-3.1-flash-lite");
   } finally {globalThis.fetch=original;}
 });
 
@@ -1663,3 +1663,16 @@ test("official source redirects are followed but outside-domain redirects are re
    }
  }finally{globalThis.fetch=previous;}
 });
+
+ test("Gemini uses Flash-Lite for correction and reserves Pro for senior review", () => {
+ const {env}=environment();env.AI_PROVIDER="gemini";
+ assert.equal(workerModel(env),"gemini-3.1-flash-lite");assert.equal(editorModel(env),"gemini-3.1-flash-lite");assert.equal(reviewModel(env),"gemini-3.1-pro-preview");
+ });
+ test("oversized-but-valid cached research resumes writing without researching again", async () => {
+ const {env,d}=environment();const {w,input}=supervisorFixture();
+ const payload={slug:input.slug,research:{research:{en:"A".repeat(35165)},briefs:{en:{sources:[]}}}};
+ d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('research-length',?,?,?,'Travel','{}','review','now','now')").run(w.site_id,input.slug,input.translations.en.title);
+ d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,error,created_at,updated_at) VALUES('research-length','topic',?,'writer','failed',?,'EN 출처 메모를 30자 이상 입력해 주세요.','now','now')").run(w.site_id,JSON.stringify(payload));
+ await recoverWorkflows(env);const state=d.sqlite.prepare("SELECT status,stage,payload_json FROM agent_workflows").get() as any;
+ assert.equal(state.status,"pending");assert.equal(state.stage,"writer");assert.equal(JSON.parse(state.payload_json).research.research.en.length,35165);
+ });

@@ -34,16 +34,21 @@ export async function generate(input: GenerateInput, env: Env) {
     new Set(languages).size !== languages.length
   )
     throw new HttpError(400, "작성 언어를 확인하세요.");
-  for (const lang of languages)
+  for (const lang of languages) {
     if (
       typeof input.research?.[lang] !== "string" ||
-      input.research[lang].trim().length < 30 ||
-      input.research[lang].length > 20000
+      input.research[lang].trim().length < 30
     )
       throw new HttpError(
         400,
         `${lang.toUpperCase()} 출처 메모를 30자 이상 입력해 주세요.`,
       );
+    if (input.research[lang].length > 360000)
+      throw new HttpError(
+        400,
+        `${lang.toUpperCase()} 조사 자료가 최대 360,000자를 넘었습니다. 자료 범위를 줄여 주세요.`,
+      );
+  }
   if (w.integration === "blogger" && input.research.en === input.research.ja)
     throw new HttpError(
       400,

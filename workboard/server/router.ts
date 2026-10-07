@@ -33,7 +33,7 @@ import {
   budgetUsage,
   budgetExamples,
 } from "./budget";
-import { budgetReset, workerModel, reviewModel } from "./model";
+import { budgetReset, workerModel, reviewModel, editorModel } from "./model";
 export async function onRequest({
   request,
   env,
@@ -503,6 +503,7 @@ export async function onRequest({
           runtime: "Cloudflare Queues",
           supervisor_model: reviewModel(env),
           worker_model: workerModel(env),
+          editor_model: editorModel(env),
           max_review_rounds: MAX_SUPERVISOR_ROUNDS,
           background: true,
         },
@@ -653,7 +654,7 @@ export async function onRequest({
             ? env.GEMINI_API_KEY
             : env.ANTHROPIC_API_KEY),
         ai_provider: env.AI_PROVIDER === "gemini" ? "gemini" : "anthropic",
-        ai_models: { worker: workerModel(env), supervisor: reviewModel(env) },
+        ai_models: { worker: workerModel(env), editor: editorModel(env), supervisor: reviewModel(env) },
         database_ready: !!env.WORKBOARD_DB,
         workspaces: await Promise.all(catalog.map((w) => readiness(w, env))),
         scheduler: "blog-agent-workboard-scheduler",

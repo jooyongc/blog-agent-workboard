@@ -6,6 +6,7 @@ export type ModelId =
   | "claude-haiku-4-5"
   | "claude-sonnet-5-5"
   | "gemini-2.5-flash"
+  | "gemini-3.1-flash-lite"
   | "gemini-3.6-flash"
   | "gemini-3.8-flash"
   | "gemini-3.1-pro-preview";
@@ -13,22 +14,31 @@ export const MODEL_RATES = {
   "claude-haiku-4-5": { input: 1, output: 5 },
   "claude-sonnet-5-5": { input: 2, output: 10 },
   "gemini-2.5-flash": { input: 0.3, output: 2.5 },
+  "gemini-3.1-flash-lite": { input: 0.25, output: 1.5 },
   "gemini-3.6-flash": { input: 0.75, output: 3.75 },
   "gemini-3.8-flash": { input: 0.75, output: 3.75 },
   "gemini-3.1-pro-preview": { input: 2, output: 12 },
 } as const;
 export function workerModel(env: Env): ModelId {
-  return env.AI_PROVIDER === "gemini" ? "gemini-3.6-flash" : "claude-haiku-4-5";
+  return env.AI_PROVIDER === "gemini"
+    ? "gemini-3.1-flash-lite"
+    : "claude-haiku-4-5";
 }
 export function reviewModel(env: Env): ModelId {
   return env.AI_PROVIDER === "gemini"
     ? "gemini-3.1-pro-preview"
     : "claude-sonnet-5-5";
 }
+export function editorModel(env: Env): ModelId {
+  return env.AI_PROVIDER === "gemini" ? workerModel(env) : reviewModel(env);
+}
 function modelRates(model: ModelId, tokens: number) {
   if (model === "gemini-3.1-pro-preview" && tokens > 200000)
     return { input: 4, output: 18 };
-  if (["gemini-3.6-flash", "gemini-3.8-flash"].includes(model) && Date.now() >= Date.UTC(2027, 0, 1))
+  if (
+    ["gemini-3.6-flash", "gemini-3.8-flash"].includes(model) &&
+    Date.now() >= Date.UTC(2027, 0, 1)
+  )
     return { input: 1.5, output: 7.5 };
   return MODEL_RATES[model];
 }
@@ -85,7 +95,8 @@ export async function modelJson(
   search?: string[],
   model: ModelId = workerModel(env),
 ) {
-  if (search?.length && model.startsWith("gemini-")) model = "gemini-3.6-flash";
+  if (search?.length && model.startsWith("gemini-"))
+    model = "gemini-3.1-flash-lite";
   const gemini = model.startsWith("gemini-");
   const apiKey = gemini ? env.GEMINI_API_KEY : env.ANTHROPIC_API_KEY;
   if (env.AI_ENABLED !== "true" || !apiKey)

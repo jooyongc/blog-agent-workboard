@@ -1332,7 +1332,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                                   (step?.output_json
                                     ? JSON.parse(step.output_json).model
                                     : null) ||
-                                    data?.orchestration?.supervisor_model,
+                                    (agent === "editor" ? data?.orchestration?.editor_model : data?.orchestration?.supervisor_model),
                                 )
                               : ["writer", "researcher", "verifier"].includes(
                                     agent,

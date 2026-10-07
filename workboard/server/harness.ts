@@ -15,6 +15,7 @@ import {
   ProviderWait,
   workerModel,
   reviewModel,
+  editorModel,
 } from "./model";
 import { budgetSettings } from "./budget";
 import {
@@ -95,6 +96,17 @@ export function planRepair(payload: any, w: { languages: string[] }) {
   };
   return true;
 }
+function wipResearchValid(notes: Record<string, string> | undefined) {
+  return (
+    !!notes &&
+    Object.values(notes).every(
+      (note) =>
+        typeof note === "string" &&
+        note.trim().length >= 30 &&
+        note.length <= 360000,
+    )
+  );
+}
 export async function recoverWorkflows(env: Env, now = Date.now()) {
   const tasks = await env.WORKBOARD_DB.prepare(
     "SELECT job_id,site_id,stage,status,error,payload_json FROM agent_workflows WHERE status IN ('failed','budget_wait','retry_wait') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted')) ORDER BY updated_at LIMIT 100",
@@ -170,7 +182,13 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
         resume = true;
       }
     }
-    if(task.status === "failed" && stage === "researcher" && env.AI_PROVIDER === "gemini" && task.error?.includes("독립적인 출처") && !payload.grounding_recovery_v3) {
+    if (
+      task.status === "failed" &&
+      stage === "researcher" &&
+      env.AI_PROVIDER === "gemini" &&
+      task.error?.includes("독립적인 출처") &&
+      !payload.grounding_recovery_v3
+    ) {
       payload.grounding_recovery_v3 = true;
       resume = true;
     }
@@ -208,12 +226,57 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
       payload.gemini_transition = true;
       resume = true;
     }
-    if (task.status === "failed" && stage === "researcher" && env.AI_PROVIDER === "gemini" && !payload.flash36_transition && (task.error?.includes("출처") || task.error?.includes("AI 답변이 완결"))) {
-      const run = await env.WORKBOARD_DB.prepare("SELECT actual,status FROM ai_runs WHERE article_key=? ORDER BY created_at DESC LIMIT 1").bind(`${task.site_id}/${payload.slug}`).first<{actual:number|null;status:string}>();
-      if(run && run.actual !== null && ["failed","complete"].includes(run.status)) {
+    if (
+      task.status === "failed" &&
+      stage === "researcher" &&
+      env.AI_PROVIDER === "gemini" &&
+      !payload.flash36_transition &&
+      (task.error?.includes("출처") || task.error?.includes("AI 답변이 완결"))
+    ) {
+      const run = await env.WORKBOARD_DB.prepare(
+        "SELECT actual,status FROM ai_runs WHERE article_key=? ORDER BY created_at DESC LIMIT 1",
+      )
+        .bind(`${task.site_id}/${payload.slug}`)
+        .first<{ actual: number | null; status: string }>();
+      if (
+        run &&
+        run.actual !== null &&
+        ["failed", "complete"].includes(run.status)
+      ) {
         payload.flash36_transition = true;
         resume = true;
       }
+    }
+    if (
+      task.status === "failed" &&
+      stage === "researcher" &&
+      env.AI_PROVIDER === "gemini" &&
+      !payload.flash31_transition &&
+      (task.error?.includes("출처") || task.error?.includes("AI 답변이 완결"))
+    ) {
+      const run = await env.WORKBOARD_DB.prepare(
+        "SELECT actual,status FROM ai_runs WHERE article_key=? ORDER BY created_at DESC LIMIT 1",
+      )
+        .bind(`${task.site_id}/${payload.slug}`)
+        .first<{ actual: number | null; status: string }>();
+      if (
+        run &&
+        run.actual !== null &&
+        ["failed", "complete"].includes(run.status)
+      ) {
+        payload.flash31_transition = true;
+        resume = true;
+      }
+    }
+    if (
+      task.status === "failed" &&
+      stage === "writer" &&
+      task.error?.includes("출처 메모") &&
+      !payload.research_length_recovery &&
+      wipResearchValid(payload.research?.research)
+    ) {
+      payload.research_length_recovery = true;
+      resume = true;
     }
     if (!resume) continue;
     delete payload.recovery;
@@ -595,13 +658,16 @@ export async function advanceHarness(env: Env) {
             task.stage === "supervisor"
               ? payload.supervision?.at(-1)
               : undefined,
-          model: ["supervisor", "editor"].includes(task.stage)
-            ? reviewModel(env)
-            : ["researcher", "writer", "verifier"].includes(task.stage)
-              ? task.stage === "researcher" && env.AI_PROVIDER === "gemini"
-                ? "gemini-3.6-flash"
-                : workerModel(env)
-              : undefined,
+          model:
+            task.stage === "supervisor"
+              ? reviewModel(env)
+              : task.stage === "editor"
+                ? editorModel(env)
+                : ["researcher", "writer", "verifier"].includes(task.stage)
+                  ? task.stage === "researcher" && env.AI_PROVIDER === "gemini"
+                    ? "gemini-3.1-flash-lite"
+                    : workerModel(env)
+                  : undefined,
         }),
         new Date().toISOString(),
         step,

@@ -1,6 +1,6 @@
 import type { Article, DraftInput, Workspace } from "../shared/types";
 import type { Env } from "./env";
-import { modelJson, reviewModel } from "./model";
+import { modelJson, reviewModel, editorModel } from "./model";
 import { quality, SEO_RULES } from "./seo";
 import { validateArticle } from "./content";
 import { insertStockPhotos } from "./media";
@@ -297,7 +297,7 @@ export async function editUnderSupervision(
       },
       7000,
       undefined,
-      reviewModel(env),
+      editorModel(env),
     );
     if (!validateArticle(result.data))
       throw new HttpError(
