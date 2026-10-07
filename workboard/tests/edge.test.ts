@@ -1569,10 +1569,10 @@ test("an existing public original becomes a private correction draft without dup
 
 test("Gemini runs without Anthropic and accounts for thinking and cached tokens", async () => {
   const {env,d}=environment();env.AI_PROVIDER="gemini";env.GEMINI_API_KEY="test-google-key";
-  assert.equal(workerModel(env),"gemini-3.8-flash");assert.equal(reviewModel(env),"gemini-3.1-pro-preview");
+  assert.equal(workerModel(env),"gemini-3.6-flash");assert.equal(reviewModel(env),"gemini-3.1-pro-preview");
   const original=globalThis.fetch;
   globalThis.fetch=async(url,init)=>{
-    assert.ok(String(url).endsWith("gemini-3.8-flash:generateContent"));
+    assert.ok(String(url).endsWith("gemini-3.6-flash:generateContent"));
     assert.ok(!String(url).includes("test-google-key"));
     assert.equal((init?.headers as Record<string,string>)["x-goog-api-key"],"test-google-key");
     const body=JSON.parse(String(init?.body));assert.equal(body.generationConfig.responseMimeType,"application/json");
@@ -1581,7 +1581,7 @@ test("Gemini runs without Anthropic and accounts for thinking and cached tokens"
   try {
     const result=await modelJson(env,"koreadecode/gemini-price","system",{},2000);
     assert.deepEqual(result.data,{ok:true});assert.ok(Math.abs(result.cost_usd-0.0025575)<1e-10);
-    assert.equal((d.sqlite.prepare("SELECT model FROM ai_runs").get() as any).model,"gemini-3.8-flash");
+    assert.equal((d.sqlite.prepare("SELECT model FROM ai_runs").get() as any).model,"gemini-3.6-flash");
   } finally {globalThis.fetch=original;}
 });
 

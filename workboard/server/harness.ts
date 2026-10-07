@@ -208,6 +208,13 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
       payload.gemini_transition = true;
       resume = true;
     }
+    if (task.status === "failed" && stage === "researcher" && env.AI_PROVIDER === "gemini" && !payload.flash36_transition && (task.error?.includes("출처") || task.error?.includes("AI 답변이 완결"))) {
+      const run = await env.WORKBOARD_DB.prepare("SELECT actual,status FROM ai_runs WHERE article_key=? ORDER BY created_at DESC LIMIT 1").bind(`${task.site_id}/${payload.slug}`).first<{actual:number|null;status:string}>();
+      if(run && run.actual !== null && ["failed","complete"].includes(run.status)) {
+        payload.flash36_transition = true;
+        resume = true;
+      }
+    }
     if (!resume) continue;
     delete payload.recovery;
     const changed = await env.WORKBOARD_DB.prepare(
@@ -592,7 +599,7 @@ export async function advanceHarness(env: Env) {
             ? reviewModel(env)
             : ["researcher", "writer", "verifier"].includes(task.stage)
               ? task.stage === "researcher" && env.AI_PROVIDER === "gemini"
-                ? "gemini-2.5-flash"
+                ? "gemini-3.6-flash"
                 : workerModel(env)
               : undefined,
         }),
