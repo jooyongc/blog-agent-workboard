@@ -775,6 +775,14 @@ export async function advanceHarness(env: Env) {
         recovering: true,
       };
     }
+    if(task.stage === "photo_editor" && e instanceof HttpError && e.message.includes("MEDIA_REVIEW")) {
+      const error = "이미지 확보 대기: 한국 배경과 주제에 맞는 라이선스 이미지 또는 생성 이미지가 필요합니다. 자료가 준비되면 이 단계부터 자동 재개합니다.";
+      await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET status='media_wait',error=?,payload_json=?,lease_until=NULL,updated_at=? WHERE job_id=?").bind(error,JSON.stringify(payload),new Date().toISOString(),task.job_id).run();
+      await env.WORKBOARD_DB.prepare("UPDATE agent_steps SET status='waiting',error=?,finished_at=? WHERE id=?").bind(error,new Date().toISOString(),step).run();
+      if(payload.input) await saveProgress(env,task.job_id,payload,"media_wait");
+      await env.WORKBOARD_DB.prepare("UPDATE content_jobs SET status='media_wait',error=?,updated_at=? WHERE id=?").bind(error,new Date().toISOString(),task.job_id).run();
+      return {worked:true,job_id:task.job_id,agent:task.stage,waiting:true,delay_seconds:900};
+    }
     if (e instanceof PendingMedia) {
       await env.WORKBOARD_DB.prepare(
         "UPDATE agent_workflows SET status='pending',payload_json=?,lease_until=NULL,updated_at=? WHERE job_id=?",

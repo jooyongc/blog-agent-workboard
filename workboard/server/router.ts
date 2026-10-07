@@ -220,7 +220,7 @@ export async function onRequest({
         )
         .run();
       await env.WORKBOARD_DB.prepare(
-        "UPDATE agent_workflows SET status='pending',error=NULL,updated_at=? WHERE site_id=? AND stage='photo_editor' AND status='failed' AND error LIKE '%MEDIA_REVIEW%' AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted'))",
+        "UPDATE agent_workflows SET status='pending',error=NULL,updated_at=? WHERE site_id=? AND stage='photo_editor' AND status IN ('failed','media_wait') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted'))",
       )
         .bind(new Date().toISOString(), w.site_id)
         .run();

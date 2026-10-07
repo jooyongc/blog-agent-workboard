@@ -1267,6 +1267,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                         ready: "예약 대기",
                         review: "검토 필요",
                         budget_wait: "예산 갱신 후 자동 재개",
+                        media_wait: "이미지 확보 대기 · 준비 후 자동 재개",
                         retry_wait: "AI 요청 제한 · 자동 재개 대기",
                         published: "발행 완료",
                         drafted: "초안 저장",
@@ -1427,6 +1428,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                     </ol>
                   </details>
                   {j.error && <p role="alert">{j.error}</p>}
+                  {j.status === "media_wait" && <p>출처 조사와 글 작성은 저장돼 있습니다. 아래 미디어 등록에 주제와 맞는 원본을 올리면 사진 선정부터 이어집니다.</p>}
                   {recovery?.retry_at && (
                     <p>
                       자동 재개 예정:{" "}

@@ -1,0 +1,2 @@
+UPDATE agent_workflows SET status='media_wait',error='이미지 확보 대기: 한국 배경·주제에 맞는 라이선스 또는 생성 이미지가 필요합니다. 자료 준비 후 자동 재개합니다.' WHERE status='failed' AND stage='photo_editor' AND error LIKE '%MEDIA_REVIEW%';
+UPDATE content_jobs SET status='media_wait',error='이미지 확보 대기: 자료 준비 후 자동 재개합니다.' WHERE id IN (SELECT job_id FROM agent_workflows WHERE status='media_wait') AND status NOT IN ('published','cancelled');

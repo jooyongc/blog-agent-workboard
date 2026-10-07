@@ -69,6 +69,7 @@ function db() {
     "0010_workspace_budgets.sql",
     "0011_supervisor_model.sql",
     "0012_research_primary_sources.sql",
+    "0013_media_wait.sql",
   ])
     d.exec(
       fs.readFileSync(
