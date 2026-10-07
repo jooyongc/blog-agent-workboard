@@ -132,10 +132,17 @@ export async function parseGemini(
           .filter((value: any) => typeof value === "string" && value.trim());
         if (!claims.length) return [];
         try {
-          const page = await fetch(link.resolved, {
-            redirect: "manual",
-            signal: AbortSignal.timeout(15000),
-          });
+          let target = link.resolved;
+          let page = await fetch(target, {redirect:"manual",signal:AbortSignal.timeout(15000)});
+          for(let hop=0; hop<4 && page.status>=300 && page.status<400; hop++) {
+            const location = page.headers.get("Location");
+            await page.body?.cancel();
+            if(!location) return [];
+            const next = new URL(location,target);
+            if(next.protocol!=="https:" || next.username || next.password || !domains.some(d=>next.hostname===d || next.hostname.endsWith("."+d))) return [];
+            target=next.href;
+            page=await fetch(target,{redirect:"manual",signal:AbortSignal.timeout(15000)});
+          }
           if (
             !page.ok ||
             !/text\/html|text\/plain/.test(

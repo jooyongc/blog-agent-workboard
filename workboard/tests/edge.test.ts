@@ -1649,3 +1649,17 @@ test("malformed received responses retry once but unknown charges stay gated", a
  assert.equal(empty.data.sources.length,0);assert.equal(empty.evidence_urls.length,0);
  }finally{globalThis.fetch=previous;}
  });
+
+test("official source redirects are followed but outside-domain redirects are rejected", async () => {
+ const previous=globalThis.fetch;
+ const raw={candidates:[{finishReason:"STOP",content:{parts:[{text:"Concise cited research"}]},groundingMetadata:{groundingChunks:[{web:{uri:"https://english.visitkorea.or.kr/source"}}],groundingSupports:[{segment:{text:"Grounded tourism guidance"},groundingChunkIndices:[0]}]}}]};
+ try {
+   for(const destination of ["https://english.visitkorea.or.kr/actual","https://unapproved.test/private"]) {
+     let calls=0;
+     globalThis.fetch=async()=>{calls++;return calls===1 ? new Response(null,{status:302,headers:{Location:destination}}) : new Response("<main>Official restaurant information for visitors to Korea. This primary evidence is enough text to verify retrieval after a normal official-site redirect.</main>",{headers:{"content-type":"text/html"}});};
+     const result=await parseGemini(raw,["english.visitkorea.or.kr"]);
+     assert.equal(result.data.sources.length,destination.includes("unapproved")?0:1);
+     assert.equal(calls,destination.includes("unapproved")?1:2);
+   }
+ }finally{globalThis.fetch=previous;}
+});
