@@ -11,7 +11,7 @@ import {
 import { budgetSettings } from "./budget";
 import { PendingMedia } from "./firefly";
 const IMAGE_MODEL = "gemini-3.1-flash-image";
-export const VISUAL_POLICY="korea-topic-no-text-v2";
+export const VISUAL_POLICY = "korea-topic-no-text-v2";
 export function generatedImagesReady(env: Env) {
   return (
     env.GEMINI_IMAGES_ENABLED === "true" &&
@@ -51,7 +51,7 @@ async function reserve(env: Env, key: string, prompt: string) {
         key,
         new Date(now + 9 * 3600000).toISOString().slice(0, 7),
         String(Math.floor((now + 9 * 3600000 - 4 * 86400000) / (7 * 86400000))),
-        0.25 + (new TextEncoder().encode(prompt).length * 0.5) / 1e6,
+        0.13 + (new TextEncoder().encode(prompt).length * 0.5) / 1e6,
         new Date(now).toISOString(),
         IMAGE_MODEL,
       )
@@ -167,8 +167,15 @@ export async function reviewPhoto(
   topic: string,
   photo: StockPhoto,
 ): Promise<StockPhoto> {
-  if (photo.visual_review?.approved && photo.visual_review.policy === VISUAL_POLICY) return photo;
-  const id = `${site}-${slug}-visual-v2-${photo.id}`.replace(/[^a-z0-9-]/gi, "-");
+  if (
+    photo.visual_review?.approved &&
+    photo.visual_review.policy === VISUAL_POLICY
+  )
+    return photo;
+  const id = `${site}-${slug}-visual-v2-${photo.id}`.replace(
+    /[^a-z0-9-]/gi,
+    "-",
+  );
   const prior = await env.WORKBOARD_DB.prepare(
     "SELECT result_json FROM creative_requests WHERE id=?",
   )
@@ -193,7 +200,7 @@ export async function reviewPhoto(
   const audit = await modelJson(
     env,
     `${site}/${slug}`,
-    'You are the senior visual quality reviewer for a South Korea editorial blog. Inspect the actual attached image. Reject Japanese or other-country markers, irrelevant generic stock, misleading documentary claims, distorted hands/faces/objects, unreadable fake text, watermarks, logos, and cultural inaccuracies. Require clear topic relevance and plausible South Korean context. Generated images are explicitly labeled conceptual illustrations, not photographs proving facts or actual locations. For generated images (Gemini or Adobe Firefly), reject ANY visible letters, words or numbers anywhere, including menu panels, signs and icons, even if apparently readable or correct. Blank menus/screens and purely pictorial symbols are acceptable. For Adobe Stock, genuine photographed text can remain. Do not require photorealism, named locations or text. Return JSON {approved:boolean,reason:"short Korean explanation"}. Approve only if the image can credibly illustrate the supplied topic.',
+    'You are the senior visual quality reviewer for a South Korea editorial blog. Inspect the actual attached image. Reject Japanese or other-country markers, irrelevant generic stock, misleading documentary claims, distorted hands/faces/objects, unreadable fake text, stock-preview watermarks and cultural inaccuracies. Incidental authentic logos or signage can remain in licensed Adobe Stock photographs; reject invented logos in generated imagery. Require clear topic relevance and plausible South Korean context. Generated images are explicitly labeled conceptual illustrations, not photographs proving facts or actual locations. For generated images (Gemini or Adobe Firefly), reject ANY visible letters, words or numbers anywhere, including menu panels, signs and icons, even if apparently readable or correct. Blank menus/screens and purely pictorial symbols are acceptable. For Adobe Stock, genuine photographed text can remain. Do not require photorealism, named locations or text. Return JSON {approved:boolean,reason:"short Korean explanation"}. Approve only if the image can credibly illustrate the supplied topic.',
     {
       topic,
       alt: photo.alt,
@@ -220,7 +227,7 @@ export async function reviewPhoto(
     model,
     run_id: audit.run_id,
     sha256,
-    policy:VISUAL_POLICY,
+    policy: VISUAL_POLICY,
   };
   await env.WORKBOARD_DB.prepare(
     "INSERT OR IGNORE INTO creative_requests(id,site_id,kind,prompt,status,result_json,created_at,updated_at) VALUES(?,?,'visual_review',?,'complete',?,?,?)",
@@ -244,7 +251,7 @@ async function createImage(
   slot: number,
   variant: number,
 ): Promise<StockPhoto> {
-  const id = `${site}-${slug}-gemini-image-${slot}-${variant}`;
+  const id = `${site}-${slug}-gemini-image-v3-${slot}-${variant}`;
   const cached = await env.WORKBOARD_DB.prepare(
     "SELECT status,result_json FROM creative_requests WHERE id=?",
   )
@@ -257,11 +264,17 @@ async function createImage(
       "MEDIA_REVIEW: 이전 이미지 요청 결과가 불명확하거나 거절되었습니다. 중복 생성하지 않습니다.",
     );
   const focus = /bow|greeting|respect/i.test(topic)
-    ? (slot%2===0 ? "Show TWO adults exchanging a clear forward bow from the waist, arms relaxed at their sides, no touching, hugging or handshake, outside a Korean hanok courtyard. The bow itself must be unmistakable." : "Show a clear side view of a person giving a respectful forward bow, arms at sides, in a plain South Korean setting. No touching or handshake.")
-    : /kiosk|self.service/i.test(topic) ? "Show ordering at a Korean restaurant kiosk. The screen must be blank with only abstract pictorial shapes, absolutely no letters or numbers. Include Korean banchan and metal utensils for context."
-    : /food|restaurant|dietary|spicy/i.test(topic) ? (slot%2===0 ? "Show a Korean restaurant customer communicating with a server, with a completely blank menu, Korean banchan and metal utensils. All signs and menus must be blank." : "Show a close-up Korean meal with banchan, metal spoon and chopsticks, fresh vegetables and chili peppers. No menus, labels, signs or text.")
-    : "Illustrate the practical topic in a recognizable South Korean setting, with no writing.";
-  const prompt = `Create one high-quality editorial illustration for this article: ${topic}. South Korea only. ${focus} ${slot % 2 === 0 ? "Wide scene showing the practical situation" : "Close-up detail illustrating a different aspect of this topic"}. ${variant ? "Use a simpler composition without faces or hands." : ""} Warm natural colors, clean realistic editorial illustration, 16:9. Korean context: if dining, use Korean banchan, metal spoon and chopsticks and Korean dishes; if transit, a contemporary Seoul transit setting without claiming a real station; if greetings, a culturally appropriate Korean gesture. No Japanese landmarks, tatami, torii, sushi, kimono or non-Korean cultural markers. ABSOLUTELY NO TEXT OR TYPOGRAPHY anywhere: no letters of any language, no Hangul, no English words, no numbers, no labels, menu writing, sign writing, speech bubbles or charts. Leave menus, screens and signs blank. Show only pictorial food and context. No logos, brands, prices or maps. No invented documentary evidence or named real locations. This is a labeled conceptual illustration, not a stock photo. Do not fetch or copy stock images.`;
+    ? slot % 2 === 0
+      ? "Show TWO adults exchanging a clear forward bow from the waist, arms relaxed at their sides, no touching, hugging or handshake, in a plain Korean hanbok greeting scene with a neutral studio background and NO buildings or signage. The bow itself must be unmistakable."
+      : "Show a clear side view of a person giving a respectful forward bow, arms at sides, in a South Korean hanbok greeting scene against a plain studio backdrop. No touching or handshake."
+    : /kiosk|self.service/i.test(topic)
+      ? "Show ordering at a Korean restaurant kiosk. The screen must be blank with only abstract pictorial shapes, absolutely no letters or numbers. Include Korean banchan and metal utensils for context."
+      : /food|restaurant|dietary|spicy/i.test(topic)
+        ? slot % 2 === 0
+          ? "Show a Korean restaurant customer communicating with a server, with no menus, no papers, no windows, no screens, no signs: only Korean banchan and metal utensils on a table against a plain wall. All signs and menus must be blank."
+          : "Show a close-up Korean meal with banchan, metal spoon and chopsticks, fresh vegetables and chili peppers. No menus, labels, signs or text."
+        : `Illustrate ${topic} as a wordless scene in a recognizable South Korean setting, with no writing.`;
+  const prompt = `Create one high-quality, photographic-style wordless editorial illustration. South Korea only. SCENE: ${focus} ${slot % 2 === 0 ? "Wide scene showing the practical situation" : "Close-up detail illustrating a different aspect of this topic"}. ${variant ? "Use a simpler composition without faces or hands." : ""} Warm natural colors, clean realistic editorial illustration, 16:9. Korean context: if dining, use Korean banchan, metal spoon and chopsticks and Korean dishes; if transit, a contemporary Seoul transit setting without claiming a real station; if greetings, a culturally appropriate Korean gesture. No Japanese landmarks, tatami, torii, sushi, kimono or non-Korean cultural markers. ABSOLUTELY NO TEXT OR TYPOGRAPHY anywhere: no letters of any language, no Hangul, no English words, no numbers, no labels, menu writing, sign writing, speech bubbles or charts. Leave menus, screens and signs blank. Show only pictorial food and context. No logos, brands, prices or maps. No invented documentary evidence or named real locations. This is a labeled conceptual illustration, not a stock photo. Do not fetch or copy stock images.`;
   const run = await reserve(env, `${site}/${slug}`, prompt);
   const now = new Date().toISOString();
   const claim = cached
@@ -283,25 +296,53 @@ async function createImage(
     received = false;
   try {
     const formats = [
-      {imageConfig:{aspectRatio:"16:9",imageSize:"1K"}},
-      {responseFormat:{image:{aspectRatio:"ASPECT_RATIO_SIXTEEN_BY_NINE",imageSize:"IMAGE_SIZE_ONE_K"}}},
+      { imageConfig: { aspectRatio: "16:9", imageSize: "1K" } },
+      {
+        responseFormat: {
+          image: {
+            aspectRatio: "ASPECT_RATIO_SIXTEEN_BY_NINE",
+            imageSize: "IMAGE_SIZE_ONE_K",
+          },
+        },
+      },
       {},
     ];
-    let r:Response | undefined;
-    for(let attempt=0; attempt<formats.length; attempt++) {
-      r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent`,{
-        method:"POST",redirect:"manual",headers:{"x-goog-api-key":String(env.GEMINI_API_KEY),"Content-Type":"application/json"},
-        body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{responseModalities:["TEXT","IMAGE"],maxOutputTokens:4096,...formats[attempt]}}),signal:AbortSignal.timeout(180000),
-      });
-      if(r.status!==400 || attempt===formats.length-1) break;
-      const rejection:any=await r.json().catch(()=>null);
-      if(!/invalid (argument|value)|unknown name/i.test(rejection?.error?.message || "")) {
-        r=Response.json(rejection,{status:400});break;
+    let r: Response | undefined;
+    for (let attempt = 0; attempt < formats.length; attempt++) {
+      r = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent`,
+        {
+          method: "POST",
+          redirect: "manual",
+          headers: {
+            "x-goog-api-key": String(env.GEMINI_API_KEY),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: {
+              responseModalities: ["TEXT", "IMAGE"],
+              maxOutputTokens: 2048,
+              ...formats[attempt],
+            },
+          }),
+          signal: AbortSignal.timeout(180000),
+        },
+      );
+      if (r.status !== 400 || attempt === formats.length - 1) break;
+      const rejection: any = await r.json().catch(() => null);
+      if (
+        !/invalid (argument|value)|unknown name/i.test(
+          rejection?.error?.message || "",
+        )
+      ) {
+        r = Response.json(rejection, { status: 400 });
+        break;
       }
       // Confirmed invalid-request responses generate no asset and are unbilled.
       // Try only wire-format compatibility; never repeat an unknown outcome.
     }
-    if(!r) throw new HttpError(502,"이미지 요청을 실행하지 못했습니다.");
+    if (!r) throw new HttpError(502, "이미지 요청을 실행하지 못했습니다.");
     if (!r.ok) {
       actual = 0;
       await settle(env, run, 0, "failed");
@@ -406,17 +447,45 @@ async function createImage(
     throw e;
   }
 }
-export async function generatedPhoto(env:Env,site:string,slug:string,topic:string,slot:number):Promise<StockPhoto & {fresh:boolean}> {
-  if(!generatedImagesReady(env)) throw new HttpError(409,"MEDIA_REVIEW: 자동 이미지 생성 연결이 필요합니다.");
-  for(let variant=0;variant<2;variant++) {
-    const id=`${site}-${slug}-gemini-image-${slot}-${variant}`;
-    const previous=await env.WORKBOARD_DB.prepare("SELECT result_json FROM creative_requests WHERE id=?").bind(id).first<{result_json:string|null}>();
-    const hadReview=!!(previous?.result_json && JSON.parse(previous.result_json).visual_review?.policy === VISUAL_POLICY);
-    const photo=await createImage(env,site,slug,topic,slot,variant);
-    const checked=await reviewPhoto(env,site,slug,topic,photo);
-    await env.WORKBOARD_DB.prepare("UPDATE creative_requests SET result_json=?,updated_at=? WHERE id=?").bind(JSON.stringify(checked),new Date().toISOString(),checked.id).run();
-    if(checked.visual_review?.approved) return {...checked,fresh:!hadReview};
-    if(!hadReview && variant===0) throw new PendingMedia("이미지 후보가 반려됐습니다. 저장된 검토 결과를 유지하고 다음 후보를 준비합니다.");
+export async function generatedPhoto(
+  env: Env,
+  site: string,
+  slug: string,
+  topic: string,
+  slot: number,
+): Promise<StockPhoto & { fresh: boolean }> {
+  if (!generatedImagesReady(env))
+    throw new HttpError(
+      409,
+      "MEDIA_REVIEW: 자동 이미지 생성 연결이 필요합니다.",
+    );
+  for (let variant = 0; variant < 2; variant++) {
+    const id = `${site}-${slug}-gemini-image-v3-${slot}-${variant}`;
+    const previous = await env.WORKBOARD_DB.prepare(
+      "SELECT result_json FROM creative_requests WHERE id=?",
+    )
+      .bind(id)
+      .first<{ result_json: string | null }>();
+    const hadReview = !!(
+      previous?.result_json &&
+      JSON.parse(previous.result_json).visual_review?.policy === VISUAL_POLICY
+    );
+    const photo = await createImage(env, site, slug, topic, slot, variant);
+    const checked = await reviewPhoto(env, site, slug, topic, photo);
+    await env.WORKBOARD_DB.prepare(
+      "UPDATE creative_requests SET result_json=?,updated_at=? WHERE id=?",
+    )
+      .bind(JSON.stringify(checked), new Date().toISOString(), checked.id)
+      .run();
+    if (checked.visual_review?.approved)
+      return { ...checked, fresh: !hadReview };
+    if (!hadReview && variant === 0)
+      throw new PendingMedia(
+        "이미지 후보가 반려됐습니다. 저장된 검토 결과를 유지하고 다음 후보를 준비합니다.",
+      );
   }
-  throw new HttpError(409,"MEDIA_REVIEW: 이미지 적합성 검토를 통과하지 못했습니다. 최대 2개 후보를 검사했으며 원본 등록이 필요합니다.");
+  throw new HttpError(
+    409,
+    "MEDIA_REVIEW: 이미지 적합성 검토를 통과하지 못했습니다. 최대 2개 후보를 검사했으며 원본 등록이 필요합니다.",
+  );
 }

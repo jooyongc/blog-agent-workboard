@@ -221,7 +221,7 @@ export async function onRequest({
         )
         .run();
       await env.WORKBOARD_DB.prepare(
-        "UPDATE agent_workflows SET status='pending',error=NULL,updated_at=? WHERE site_id=? AND stage='photo_editor' AND status IN ('failed','media_wait') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted'))",
+        "UPDATE agent_workflows SET status='pending',error=NULL,updated_at=? WHERE site_id=? AND stage='photo_editor' AND (status IN ('failed','media_wait') OR (status='budget_wait' AND instr(error,'이미지 생성')=1)) AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted'))",
       )
         .bind(new Date().toISOString(), w.site_id)
         .run();
@@ -516,7 +516,13 @@ export async function onRequest({
           firefly: fireflyReady(env),
           gemini_images: generatedImagesReady(env),
         },
-        media_assets: (await env.WORKBOARD_DB.prepare("SELECT result_json FROM creative_requests WHERE site_id=? AND kind='image' AND status='complete' AND json_extract(result_json,'$.visual_review.approved')=1 AND json_extract(result_json,'$.visual_review.policy')='korea-topic-no-text-v2' ORDER BY created_at DESC LIMIT 30").bind(id).all<{result_json:string}>()).results.map(row=>JSON.parse(row.result_json)),
+        media_assets: (
+          await env.WORKBOARD_DB.prepare(
+            "SELECT result_json FROM creative_requests WHERE site_id=? AND kind='image' AND status='complete' AND json_extract(result_json,'$.visual_review.approved')=1 AND json_extract(result_json,'$.visual_review.policy')='korea-topic-no-text-v2' ORDER BY created_at DESC LIMIT 30",
+          )
+            .bind(id)
+            .all<{ result_json: string }>()
+        ).results.map((row) => JSON.parse(row.result_json)),
         jobs: await jobs(env, id),
         runs: r.results,
         workflows: (

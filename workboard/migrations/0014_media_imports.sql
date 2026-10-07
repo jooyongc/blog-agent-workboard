@@ -1,0 +1,2 @@
+CREATE TABLE media_imports(id TEXT PRIMARY KEY,site_id TEXT NOT NULL,asset_id TEXT NOT NULL,provider TEXT NOT NULL DEFAULT 'Adobe Stock',title TEXT NOT NULL,tags_json TEXT NOT NULL,download_url TEXT NOT NULL,license_reference TEXT NOT NULL,license_state TEXT NOT NULL,pricing TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'ready',error TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+CREATE INDEX media_imports_pending ON media_imports(status,created_at);

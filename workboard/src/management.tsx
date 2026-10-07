@@ -1270,6 +1270,31 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                 editor: "근거·구조 보완",
                 publisher: "임시 발행",
               };
+              let savedArticles: Record<string, any> = {};
+              try {
+                savedArticles = JSON.parse(j.article_json || "{}");
+              } catch {}
+              const savedPhotos = Object.values(savedArticles)
+                .flatMap((article) => article.images || [])
+                .filter(
+                  (photo) =>
+                    photo.visual_review?.approved &&
+                    photo.visual_review?.policy === "korea-topic-no-text-v2",
+                );
+              const generatedPhotos = (data.media_assets || []).filter(
+                (photo: any) =>
+                  photo.id.startsWith(
+                    `${active.site_id}-${j.slug}-gemini-image-`,
+                  ),
+              );
+              const previewPhotos = [
+                ...new Map<string, any>(
+                  [...savedPhotos, ...generatedPhotos].map((photo) => [
+                    photo.url,
+                    photo,
+                  ]),
+                ).values(),
+              ];
               return (
                 <article key={j.id}>
                   <span
@@ -1297,7 +1322,31 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                     )[j.status] ?? j.status}
                   </span>
                   <h3>{j.title}</h3>
-                  {data.media_assets?.some((photo:any)=>photo.id.startsWith(`${active.site_id}-${j.slug}-gemini-image-`)) && <div className="grid grid-cols-2 gap-3">{data.media_assets.filter((photo:any)=>photo.id.startsWith(`${active.site_id}-${j.slug}-gemini-image-`)).map((photo:any)=><figure key={photo.id}><img src={photo.url} alt={photo.alt} loading="lazy" style={{width:"100%",aspectRatio:"16/9",objectFit:"cover",borderRadius:12}}/><figcaption>AI 삽화 · Pro 검토 완료</figcaption></figure>)}</div>}
+                  {previewPhotos.length > 0 && (
+                    <div className="grid grid-cols-2 gap-3">
+                      {previewPhotos.map((photo) => (
+                        <figure key={photo.id}>
+                          <img
+                            src={photo.url}
+                            alt={photo.alt}
+                            loading="lazy"
+                            style={{
+                              width: "100%",
+                              aspectRatio: "16/9",
+                              objectFit: "cover",
+                              borderRadius: 12,
+                            }}
+                          />
+                          <figcaption>
+                            {photo.provider === "Adobe Stock"
+                              ? "Adobe Stock 원본"
+                              : "AI 삽화"}{" "}
+                            · Pro 검토 완료
+                          </figcaption>
+                        </figure>
+                      ))}
+                    </div>
+                  )}
                   <p>
                     {j.publish_at
                       ? new Date(j.publish_at).toLocaleString("ko-KR", {
@@ -1705,6 +1754,21 @@ function MediaLibrary({ active }: Pick<Props, "active">) {
   const [message, setMessage] = useState(""),
     [busy, setBusy] = useState(false),
     [provider, setProvider] = useState("Adobe Firefly");
+  const [assets, setAssets] = useState<any[]>([]);
+  useEffect(() => {
+    let activeRequest = true;
+    setAssets([]);
+    void api<{ assets: any[] }>(
+      `media-library?site_id=${encodeURIComponent(active.site_id)}`,
+    )
+      .then((result) => {
+        if (activeRequest) setAssets(result.assets || []);
+      })
+      .catch(() => {});
+    return () => {
+      activeRequest = false;
+    };
+  }, [active.site_id, message]);
   async function upload(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = e.currentTarget;
@@ -1739,6 +1803,34 @@ function MediaLibrary({ active }: Pick<Props, "active">) {
         생성하고 Pro가 실제 이미지를 검사합니다. 비용은 사이트별 AI 예산에
         포함되며, 생성 이미지는 AI 삽화로 표시됩니다.
       </p>
+      <p>
+        등록된 원본 {assets.length}개 · 먼저 주제 적합성을 검토하고 부족한
+        수량만 생성합니다.
+      </p>
+      {assets.length > 0 && (
+        <div className="grid grid-cols-2 gap-3">
+          {assets
+            .filter((asset) => asset.kind === "photo")
+            .map((asset) => (
+              <figure key={asset.id}>
+                <img
+                  src={asset.url}
+                  alt={asset.title}
+                  loading="lazy"
+                  style={{
+                    width: "100%",
+                    aspectRatio: "16/9",
+                    objectFit: "cover",
+                    borderRadius: 12,
+                  }}
+                />
+                <figcaption>
+                  {asset.title} · {asset.provider}
+                </figcaption>
+              </figure>
+            ))}
+        </div>
+      )}
       <form onSubmit={(e) => void upload(e)}>
         <label className="field-label">
           종류
@@ -1764,7 +1856,7 @@ function MediaLibrary({ active }: Pick<Props, "active">) {
           <input
             required
             name="tags"
-            placeholder="Korea travel, shopping, skincare"
+            placeholder="예: ordering, restaurant, spicy, kiosk, subway"
           />
         </label>
         {provider === "Adobe Stock" && (

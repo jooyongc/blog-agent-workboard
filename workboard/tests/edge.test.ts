@@ -1,3 +1,4 @@
+import {importLicensedMedia} from "../server/media-import";
 import {generatedPhoto,reviewPhoto,imageCost,assertReviewedPhotos} from "../server/generated-media";
 import { test } from "node:test";
 import { parseGemini } from "../server/gemini";
@@ -71,6 +72,7 @@ function db() {
     "0011_supervisor_model.sql",
     "0012_research_primary_sources.sql",
     "0013_media_wait.sql",
+    "0014_media_imports.sql",
   ])
     d.exec(
       fs.readFileSync(
@@ -1715,4 +1717,11 @@ test("official source redirects are followed but outside-domain redirects are re
  const result=await advanceHarness(env) as any;
  assert.equal(result.worked,true);assert.equal(result.waiting,undefined);
  assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows WHERE job_id='media-wait-test'").get() as any).status,"media_wait");
+ });
+
+ test("licensed Adobe import stores the original once and removes its expiring download link", async () => {
+ const {env,d}=environment();Object.assign(env,{NATIVE_BLOG_SUPABASE_URL:"https://test.supabase.co",NATIVE_BLOG_SUPABASE_KEY:"test"});
+ d.sqlite.prepare("INSERT INTO media_imports(id,site_id,asset_id,title,tags_json,download_url,license_reference,license_state,pricing,created_at,updated_at) VALUES('import-test','koreabylocal','123','Korean restaurant','[\"restaurant\"]','https://stock-apex-images-prod-ew1.s3.eu-west-1.amazonaws.com/photo.jpg','Free Adobe Stock licence 123','purchased','free','now','now')").run();
+ const old=globalThis.fetch;let gets=0,uploads=0;globalThis.fetch=async(url,init)=>{if(init?.method==="POST"){uploads++;assert.ok(String(url).includes("test.supabase.co/storage"));return new Response("",{status:200});}gets++;return new Response(new Uint8Array([1,2,3]),{headers:{"Content-Type":"image/jpeg"}});};
+ try {assert.equal(await importLicensedMedia(env),true);assert.equal(await importLicensedMedia(env),false);assert.equal(gets,1);assert.equal(uploads,1);const row=d.sqlite.prepare("SELECT status,download_url FROM media_imports").get() as any;assert.equal(row.status,"complete");assert.equal(row.download_url,"");assert.equal((d.sqlite.prepare("SELECT provider FROM reusable_media").get() as any).provider,"Adobe Stock");}finally{globalThis.fetch=old;}
  });

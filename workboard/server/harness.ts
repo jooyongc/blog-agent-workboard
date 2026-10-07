@@ -1,3 +1,4 @@
+import { importLicensedMedia } from "./media-import";
 import type { Env } from "./env";
 import type { DraftInput } from "../shared/types";
 import { workspace, readiness } from "./registry";
@@ -279,6 +280,26 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
       payload.research_length_recovery = true;
       resume = true;
     }
+    if (
+      task.status === "budget_wait" &&
+      stage === "photo_editor" &&
+      task.error?.startsWith("이미지 생성") &&
+      !payload.image_budget_sizing_v2
+    ) {
+      payload.image_budget_sizing_v2 = true;
+      resume = true;
+    }
+    if (
+      task.status === "budget_wait" &&
+      stage === "supervisor" &&
+      env.AI_PROVIDER === "gemini" &&
+      payload.input &&
+      Object.keys(payload.input.translations).length === 1 &&
+      !payload.review_budget_sizing_v2
+    ) {
+      payload.review_budget_sizing_v2 = true;
+      resume = true;
+    }
     if (!resume) continue;
     delete payload.recovery;
     const changed = await env.WORKBOARD_DB.prepare(
@@ -344,6 +365,8 @@ export async function enqueueApproved(env: Env) {
   }
 }
 export async function advanceHarness(env: Env) {
+  if (await importLicensedMedia(env))
+    return { worked: true, agent: "licensed_media_import" };
   await recoverWorkflows(env);
   const reconnect = await env.WORKBOARD_DB.prepare(
     "SELECT job_id,site_id,stage,error,payload_json FROM agent_workflows WHERE status IN ('failed','media_wait') AND stage IN ('photo_editor','publisher') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted'))",
@@ -377,14 +400,25 @@ export async function advanceHarness(env: Env) {
   )
     .bind(new Date().toISOString())
     .run();
-  if(env.MEDIA_POLICY === "adobe-generated" && generatedImagesReady(env)) {
-    const outdated=await env.WORKBOARD_DB.prepare("SELECT job_id,payload_json FROM agent_workflows WHERE status='pending' AND stage IN ('verifier','supervisor','publisher')").all<{job_id:string;payload_json:string}>();
-    for(const row of outdated.results) {
-      const payload=JSON.parse(row.payload_json);
-      if(payload.input && Object.values(payload.input.translations).some((article:any)=>!approvedMedia(article))) {
+  if (env.MEDIA_POLICY === "adobe-generated" && generatedImagesReady(env)) {
+    const outdated = await env.WORKBOARD_DB.prepare(
+      "SELECT job_id,payload_json FROM agent_workflows WHERE status='pending' AND stage IN ('verifier','supervisor','publisher')",
+    ).all<{ job_id: string; payload_json: string }>();
+    for (const row of outdated.results) {
+      const payload = JSON.parse(row.payload_json);
+      if (
+        payload.input &&
+        Object.values(payload.input.translations).some(
+          (article: any) => !approvedMedia(article),
+        )
+      ) {
         delete payload.supervisor_approval;
-        payload.supervisor_rounds=0;
-        await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET stage='photo_editor',payload_json=?,updated_at=? WHERE job_id=? AND status='pending'").bind(JSON.stringify(payload),new Date().toISOString(),row.job_id).run();
+        payload.supervisor_rounds = 0;
+        await env.WORKBOARD_DB.prepare(
+          "UPDATE agent_workflows SET stage='photo_editor',payload_json=?,updated_at=? WHERE job_id=? AND status='pending'",
+        )
+          .bind(JSON.stringify(payload), new Date().toISOString(), row.job_id)
+          .run();
       }
     }
   }
@@ -800,7 +834,10 @@ export async function advanceHarness(env: Env) {
       e instanceof HttpError &&
       e.message.includes("MEDIA_REVIEW")
     ) {
-      const error = "이미지 확보 대기: " + e.message.replace("MEDIA_REVIEW: ","") + " 원본을 등록하면 이 단계부터 자동 재개합니다.";
+      const error =
+        "이미지 확보 대기: " +
+        e.message.replace("MEDIA_REVIEW: ", "") +
+        " 원본을 등록하면 이 단계부터 자동 재개합니다.";
       await env.WORKBOARD_DB.prepare(
         "UPDATE agent_workflows SET status='media_wait',error=?,payload_json=?,lease_until=NULL,updated_at=? WHERE job_id=?",
       )

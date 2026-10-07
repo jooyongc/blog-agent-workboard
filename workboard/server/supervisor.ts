@@ -249,7 +249,7 @@ export async function supervise(
       })),
       round,
     },
-    12000,
+    env.AI_PROVIDER === "gemini" && w.languages.length === 1 ? 6000 : 12000,
     undefined,
     model,
   );
