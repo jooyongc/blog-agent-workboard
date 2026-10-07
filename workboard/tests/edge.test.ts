@@ -1637,3 +1637,14 @@ test("malformed received responses retry once but unknown charges stay gated", a
   try {await assert.rejects(()=>stockPhotos(env,"Korean bowing etiquette",2,"koreabylocal"),/MEDIA_REVIEW/);assert.equal(calls,0);}finally{globalThis.fetch=previous;}
   const {input}=supervisorFixture();assert.equal(approvedMedia(input.translations.en),false);
  });
+
+ test("plain grounded search uses only fetched official evidence, never model memory", async () => {
+ const previous=globalThis.fetch;
+ globalThis.fetch=async()=>new Response("<main>Official Korean restaurant guidance. Visitors can consult menu information and ask restaurant staff about ingredients. This is fetched primary source evidence.</main>",{headers:{"content-type":"text/html"}});
+ try {
+ const result=await parseGemini({candidates:[{finishReason:"STOP",content:{parts:[{text:"A model summary without JSON"}]},groundingMetadata:{groundingChunks:[{web:{uri:"https://english.visitseoul.net/etiquette"}}],groundingSupports:[{segment:{text:"A grounded claim"},groundingChunkIndices:[0]}]}}]},["english.visitseoul.net"]);
+ assert.equal(result.data.sources.length,1);assert.ok(result.data.sources[0].evidence.includes("fetched primary source evidence"));assert.equal(result.data.sources[0].evidence.includes("A model summary"),false);
+ const empty=await parseGemini({candidates:[{finishReason:"STOP",content:{parts:[{text:"Memory-only answer"}]}}]},["english.visitseoul.net"]);
+ assert.equal(empty.data.sources.length,0);assert.equal(empty.evidence_urls.length,0);
+ }finally{globalThis.fetch=previous;}
+ });

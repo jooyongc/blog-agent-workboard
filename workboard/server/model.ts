@@ -5,11 +5,13 @@ import { budgetSettings } from "./budget";
 export type ModelId =
   | "claude-haiku-4-5"
   | "claude-sonnet-5-5"
+  | "gemini-2.5-flash"
   | "gemini-3.8-flash"
   | "gemini-3.1-pro-preview";
 export const MODEL_RATES = {
   "claude-haiku-4-5": { input: 1, output: 5 },
   "claude-sonnet-5-5": { input: 2, output: 10 },
+  "gemini-2.5-flash": { input: 0.3, output: 2.5 },
   "gemini-3.8-flash": { input: 0.75, output: 3.75 },
   "gemini-3.1-pro-preview": { input: 2, output: 12 },
 } as const;
@@ -81,6 +83,7 @@ export async function modelJson(
   search?: string[],
   model: ModelId = workerModel(env),
 ) {
+  if (search?.length && model.startsWith("gemini-")) model = "gemini-2.5-flash";
   const gemini = model.startsWith("gemini-");
   const apiKey = gemini ? env.GEMINI_API_KEY : env.ANTHROPIC_API_KEY;
   if (env.AI_ENABLED !== "true" || !apiKey)
@@ -219,7 +222,11 @@ export async function modelJson(
         d.usage.output_tokens * actualRates.output) /
         1000000 +
       (d.usage.server_tool_use?.web_search_requests ?? 0) * 0.01 +
-      (g?.searches || 0) * 0.014;
+      (model === "gemini-2.5-flash"
+        ? (g?.searches || 0) > 0
+          ? 0.035
+          : 0
+        : (g?.searches || 0) * 0.014);
     settled = true;
     await env.WORKBOARD_DB.prepare(
       "UPDATE ai_runs SET actual=?,reserved=?,status='complete' WHERE id=?",

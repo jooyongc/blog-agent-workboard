@@ -60,7 +60,7 @@ export async function requestGemini(
                 (domains?.length
                   ? "\nYou MUST use Google Search before answering, never answer from memory. Search at most three queries using only these official domains: " +
                     domains.join(", ") +
-                    ". Return exact grounded source URLs in JSON."
+                    ". SEARCH PHASE: Do not return JSON or code blocks. Write concise natural-language findings with Google Search citations. Search queries must explicitly include site: filters for these official domains. Ignore the earlier JSON formatting instruction; grounding metadata will be structured by the server."
                   : ""),
             },
           ],
@@ -69,7 +69,10 @@ export async function requestGemini(
         generationConfig: {
           temperature: 0.2,
           maxOutputTokens: maxTokens,
-          thinkingConfig: { thinkingLevel: "low" },
+          thinkingConfig:
+            model === "gemini-2.5-flash"
+              ? { thinkingBudget: 0 }
+              : { thinkingLevel: "low" },
           ...(!domains?.length ? { responseMimeType: "application/json" } : {}),
         },
         ...(domains?.length ? { tools: [{ googleSearch: {} }] } : {}),
@@ -94,7 +97,7 @@ export async function parseGemini(
         .map((c: any) => c.web?.uri)
         .filter((url: any) => typeof url === "string"),
     ),
-  ].slice(0, 8);
+  ].slice(0, 20);
   const resolved = domains?.length
     ? await Promise.all(
         links.map(async (url) => ({
@@ -110,6 +113,79 @@ export async function parseGemini(
         text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1),
       );
     } catch {}
+  }
+  if (domains?.length && !data && text) {
+    const batches = await Promise.all(
+      resolved.map(async (link) => {
+        if (!link.resolved) return [];
+        const indices = (metadata.groundingChunks || []).flatMap(
+          (chunk: any, index: number) =>
+            chunk.web?.uri === link.url ? [index] : [],
+        );
+        const claims = (metadata.groundingSupports || [])
+          .filter((support: any) =>
+            support.groundingChunkIndices?.some((i: number) =>
+              indices.includes(i),
+            ),
+          )
+          .map((support: any) => support.segment?.text)
+          .filter((value: any) => typeof value === "string" && value.trim());
+        if (!claims.length) return [];
+        try {
+          const page = await fetch(link.resolved, {
+            redirect: "manual",
+            signal: AbortSignal.timeout(15000),
+          });
+          if (
+            !page.ok ||
+            !/text\/html|text\/plain/.test(
+              page.headers.get("content-type") || "",
+            )
+          ) {
+            await page.body?.cancel();
+            return [];
+          }
+          const html = (await page.text()).slice(0, 250000);
+          const main =
+            html.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i)?.[1] || html;
+          const evidence = main
+            .replace(
+              /<(script|style|nav|header|footer)\b[^>]*>[\s\S]*?<\/\1>/gi,
+              " ",
+            )
+            .replace(/<[^>]+>/g, " ")
+            .replace(/&nbsp;/g, " ")
+            .replace(/&amp;/g, "&")
+            .replace(/&#39;|&apos;/g, "'")
+            .replace(/&quot;/g, '"')
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 16000);
+          if (evidence.length < 100) return [];
+          return [
+            {
+              url: link.resolved,
+              checked_at: new Date().toISOString().slice(0, 10),
+              claim: claims.join(" "),
+              evidence,
+            },
+          ];
+        } catch {
+          return [];
+        }
+      }),
+    );
+    const sources = batches.flat();
+    data = {
+      brief: text,
+      primary_keyword: "",
+      secondary_keywords: [],
+      aeo_question_variants: [],
+      sources,
+      unsupported: sources.length
+        ? []
+        : ["공식 출처의 검색 근거가 반환되지 않았습니다."],
+    };
   }
   // Only exact redirects from actual grounding metadata can be normalized.
   if (Array.isArray(data?.sources))

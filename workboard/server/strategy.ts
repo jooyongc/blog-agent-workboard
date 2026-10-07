@@ -292,6 +292,40 @@ export async function research(
         rejected: [...outcome.rejected, ...second.rejected],
       };
     }
+    if (outcome.distinct < 2 && env.AI_PROVIDER === "gemini") {
+      const extra = await modelJson(
+        env,
+        key,
+        `Find additional official PRIMARY source pages for ${w.name}. Existing official sources must be preserved. Search for official tourist restaurant information, Korean food menus, vegetarian options and dining etiquette relevant to the topic. Use specific official-page queries; do not insist on the entire article title matching one page. Avoid blogs. Use Google Search and provide concise cited findings.`,
+        {
+          ...input,
+          existing_source_urls: outcome.accepted.map((source) => source.url),
+          search_queries: domains.map(
+            (domain) => `site:${domain} Korean food restaurant dining guide`,
+          ),
+        },
+        4000,
+        domains,
+      );
+      const combined = [...r.evidence_urls, ...extra.evidence_urls];
+      outcome = reconcileSources(
+        [
+          ...outcome.accepted,
+          ...(Array.isArray(extra.data.sources) ? extra.data.sources : []),
+        ],
+        combined,
+        domains,
+      );
+      r = {
+        ...r,
+        evidence_urls: combined,
+        data: {
+          ...r.data,
+          brief: [r.data.brief, extra.data.brief].filter(Boolean).join("\n"),
+          sources: outcome.accepted,
+        },
+      };
+    }
     if (outcome.distinct < 2)
       throw new HttpError(
         409,

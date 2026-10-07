@@ -170,6 +170,10 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
         resume = true;
       }
     }
+    if(task.status === "failed" && stage === "researcher" && env.AI_PROVIDER === "gemini" && task.error?.includes("독립적인 출처") && !payload.grounding_recovery_v2) {
+      payload.grounding_recovery_v2 = true;
+      resume = true;
+    }
     if (task.status === "retry_wait")
       resume = Date.parse(payload.provider_retry_at) <= now;
     if (
@@ -587,7 +591,9 @@ export async function advanceHarness(env: Env) {
           model: ["supervisor", "editor"].includes(task.stage)
             ? reviewModel(env)
             : ["researcher", "writer", "verifier"].includes(task.stage)
-              ? workerModel(env)
+              ? task.stage === "researcher" && env.AI_PROVIDER === "gemini"
+                ? "gemini-2.5-flash"
+                : workerModel(env)
               : undefined,
         }),
         new Date().toISOString(),
