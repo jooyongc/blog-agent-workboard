@@ -107,9 +107,9 @@ export async function assertReviewedPhotos(env: Env, photos: StockPhoto[]) {
   for (const photo of [...new Map(photos.map((p) => [p.url, p])).values()]) {
     ownedUrl(env, photo.url);
     const record = await env.WORKBOARD_DB.prepare(
-      "SELECT status FROM ai_runs WHERE id=? AND status='complete' AND model='gemini-3.1-pro-preview'",
+      "SELECT status FROM ai_runs WHERE id=? AND status='complete' AND model=?",
     )
-      .bind(photo.visual_review?.run_id || "")
+      .bind(photo.visual_review?.run_id || "",photo.visual_review?.model || "")
       .first();
     if (!record || !photo.visual_review?.approved)
       throw new HttpError(
@@ -196,7 +196,7 @@ export async function reviewPhoto(
   const data = await response.arrayBuffer();
   if (data.byteLength > 12 * 1024 * 1024)
     throw new HttpError(413, "검토 이미지가 너무 큽니다.");
-  const model = "gemini-3.1-pro-preview" as const;
+  const model = reviewModel(env);
   const audit = await modelJson(
     env,
     `${site}/${slug}`,
@@ -251,7 +251,7 @@ async function createImage(
   slot: number,
   variant: number,
 ): Promise<StockPhoto> {
-  const id = `${site}-${slug}-gemini-image-v3-${slot}-${variant}`;
+  const id = `${site}-${slug}-gemini-image-v${env.MEDIA_GENERATION_REVISION || 3}-${slot}-${variant}`;
   const cached = await env.WORKBOARD_DB.prepare(
     "SELECT status,result_json FROM creative_requests WHERE id=?",
   )
@@ -263,7 +263,9 @@ async function createImage(
       409,
       "MEDIA_REVIEW: 이전 이미지 요청 결과가 불명확하거나 거절되었습니다. 중복 생성하지 않습니다.",
     );
-  const focus = /bow|greeting|respect/i.test(topic)
+  const focus = /k.pop|fandom|bias|stan/i.test(topic)
+    ? slot % 2 === 0 ? "South Korean pop fandom concept: two plain unbranded colorful concert light sticks on a neutral studio background. No people, no hands, no windows, no buildings, no vehicles, no writing, no albums or labels." : "South Korean pop fandom concept: abstract colored concert lighting and silhouetted audience from behind. Featureless dark silhouettes with no visible faces or fingers, no screens, signs, banners or writing."
+    : /bow|greeting|respect/i.test(topic)
     ? slot % 2 === 0
       ? "Show TWO adults exchanging a clear forward bow from the waist, arms relaxed at their sides, no touching, hugging or handshake, in a plain Korean hanbok greeting scene with a neutral studio background and NO buildings or signage. The bow itself must be unmistakable."
       : "Show a clear side view of a person giving a respectful forward bow, arms at sides, in a South Korean hanbok greeting scene against a plain studio backdrop. No touching or handshake."
@@ -460,7 +462,7 @@ export async function generatedPhoto(
       "MEDIA_REVIEW: 자동 이미지 생성 연결이 필요합니다.",
     );
   for (let variant = 0; variant < 2; variant++) {
-    const id = `${site}-${slug}-gemini-image-v3-${slot}-${variant}`;
+    const id = `${site}-${slug}-gemini-image-v${env.MEDIA_GENERATION_REVISION || 3}-${slot}-${variant}`;
     const previous = await env.WORKBOARD_DB.prepare(
       "SELECT result_json FROM creative_requests WHERE id=?",
     )

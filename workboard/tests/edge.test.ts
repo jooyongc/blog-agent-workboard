@@ -1,3 +1,4 @@
+import {applyModelSettings,saveModels} from "../server/model-settings";
 import {importLicensedMedia} from "../server/media-import";
 import {generatedPhoto,reviewPhoto,imageCost,assertReviewedPhotos} from "../server/generated-media";
 import { test } from "node:test";
@@ -73,6 +74,7 @@ function db() {
     "0012_research_primary_sources.sql",
     "0013_media_wait.sql",
     "0014_media_imports.sql",
+    "0015_model_settings.sql",
   ])
     d.exec(
       fs.readFileSync(
@@ -1749,4 +1751,40 @@ test("question headings mentioning sources count as editorial sections", () => {
  const a={...input.translations.en,content_md:input.translations.en.content_md.replace("## What are the hours?","## What do the official sources say?")};
  assert.equal(quality(a,w,"en").signals.question_h2_count,3);
  assert.equal(quality(a,w,"en").passed,true);
+});
+
+test("model settings persist mixed providers, reject missing models and keep credentials server side",async()=>{
+ const {env}=environment();env.GEMINI_API_KEY="google-test";env.ANTHROPIC_API_KEY="claude-test";
+ const fetchBefore=globalThis.fetch;
+ globalThis.fetch=async(url)=>Response.json(String(url).includes("googleapis")?{models:[{name:"models/gemini-3.1-flash-lite",supportedGenerationMethods:["generateContent"]}]}:{data:[{id:"claude-sonnet-5-5"}]});
+ try{
+  await saveModels(env,{worker:"gemini-3.1-flash-lite",supervisor:"claude-sonnet-5-5"});
+  const selected=await applyModelSettings(env);
+  assert.equal(workerModel(selected),"gemini-3.1-flash-lite");assert.equal(reviewModel(selected),"claude-sonnet-5-5");assert.equal(editorModel(selected),"gemini-3.1-flash-lite");
+  await assert.rejects(saveModels(env,{worker:"unknown",supervisor:"claude-sonnet-5-5"}));
+  await assert.rejects(saveModels(env,{worker:"gemini-3.1-flash-lite",supervisor:"claude-haiku-4-5"}));
+  await assert.rejects(saveModels(env,{worker:"claude-opus-5-5",supervisor:"claude-sonnet-5-5"}));
+  const response=await request("ai-models",env);
+  const text=await response.text();assert.equal(response.status,200);assert.equal(text.includes("claude-test"),false);assert.equal(text.includes("google-test"),false);
+  assert.equal((await request("ai-models",env,{},false)).status,401);
+ }finally{globalThis.fetch=fetchBefore;}
+});
+test("Claude visual review sends real image bytes and records the selected model",async()=>{
+ const {env,d}=environment();env.AI_ENABLED="true";env.ANTHROPIC_API_KEY="claude-test";
+ const before=globalThis.fetch;let sent:any;
+ globalThis.fetch=async(_url,init)=>{sent=JSON.parse(String(init?.body));return Response.json({stop_reason:"end_turn",content:[{type:"text",text:'{"approved":true,"reason":"적합"}'}],usage:{input_tokens:20,output_tokens:20}});};
+ try{
+  const result=await modelJson(env,"koreabylocal/vision-fixture","Inspect actual image",{},200,undefined,"claude-sonnet-5-5",[{mimeType:"image/jpeg",data:"YWJj"}]);
+  assert.equal(result.data.approved,true);assert.equal(sent.model,"claude-sonnet-5-5");assert.equal(sent.messages[0].content[1].source.data,"YWJj");
+  assert.equal((d.sqlite.prepare("SELECT model FROM ai_runs WHERE id=?").get(result.run_id) as any).model,"claude-sonnet-5-5");
+ }finally{globalThis.fetch=before;}
+});
+test("media resume starts one new candidate batch while retaining article and billing history",async()=>{
+ const {env,d}=environment();
+ d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('media-retry','koreadecode','media-retry','Fandom','culture','{}','media_wait','now','now')").run();
+ d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES('media-retry','topic-retry','koreadecode','photo_editor','media_wait',?,'now','now')").run(JSON.stringify({input:{saved:true},research:{saved:true}}));
+ const response=await request("automation/retry",env,{method:"POST",body:JSON.stringify({site_id:"koreadecode",job_id:"media-retry"})});assert.equal(response.status,200);
+ const row=d.sqlite.prepare("SELECT status,payload_json FROM agent_workflows WHERE job_id='media-retry'").get() as any;const p=JSON.parse(row.payload_json);assert.equal(row.status,"pending");assert.equal(p.photo_retry_revision,4);assert.equal(p.input.saved,true);assert.equal(p.research.saved,true);
+ d.sqlite.prepare("UPDATE agent_workflows SET status='media_wait' WHERE job_id='media-retry'").run();
+ assert.equal((await request("automation/retry",env,{method:"POST",body:JSON.stringify({site_id:"koreadecode",job_id:"media-retry"})})).status,409);
 });

@@ -1533,7 +1533,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                   {data?.workflows?.some(
                     (f: any) =>
                       f.job_id === j.id &&
-                      ["failed", "interrupted"].includes(f.status),
+                      ["failed", "interrupted", "media_wait"].includes(f.status),
                   ) && (
                     <button
                       className="button-secondary"
@@ -1552,7 +1552,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                           .catch((e) => setError(e.message))
                       }
                     >
-                      중단 단계부터 재개
+                      {j.status === "media_wait" ? "새 이미지 후보로 재개 · 비용 발생" : "중단 단계부터 재개"}
                     </button>
                   )}
                   {j.status === "drafted" && (
@@ -1620,6 +1620,8 @@ export function Connections({
 }: Pick<Props, "workspaces" | "active">) {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
+  const [models,setModels]=useState<any>(null),[modelBusy,setModelBusy]=useState(false),[modelMessage,setModelMessage]=useState("");
+  useEffect(()=>{void api("ai-models").then(setModels).catch(e=>setError(e.message));},[]);
   const [measurement, setMeasurement] = useState<any>(null);
   const [measuring, setMeasuring] = useState(false);
   useEffect(() => {
@@ -1644,6 +1646,23 @@ export function Connections({
         <p>AI 연결: {data?.ai_ready ? "준비됨" : "설정 필요"}</p>
         <p>작업 기록: {data?.database_ready ? "준비됨" : "설정 필요"}</p>
         <p>스케줄러: blog-agent-workboard-scheduler · 15분 간격 실행</p>
+      </section>
+      <section className="studio-panel form-body">
+        <h2>AI 모델 선택</h2>
+        <p>모든 워크스페이스에 적용됩니다. 저장 후 다음 실행 단계부터 사용하며, 완료된 글은 다시 작성하지 않습니다.</p>
+        {models && <>
+          {(["worker","supervisor"] as const).map(role=><label className="field-label" key={role}>{role==="worker"?"조사·작성·기초 검증·보완":"상위 검토·이미지 적합성 검토"}
+            <select value={models.selected[role]} onChange={e=>setModels({...models,selected:{...models.selected,[role]:e.target.value}})}>
+              {["gemini","anthropic"].map(provider=><optgroup key={provider} label={provider==="gemini"?"Google Gemini":"Anthropic Claude"}>
+                {models.choices.filter((m:any)=>m.provider===provider&&(role!=="supervisor"||m.senior)).map((m:any)=><option key={m.id} value={m.id} disabled={!m.available}>{modelLabel(m.id)}{m.available?"":" · API 사용 확인 필요"}</option>)}
+              </optgroup>)}
+            </select>
+          </label>)}
+          <p>이미지 생성은 Gemini 3.1 Flash Image를 사용합니다. Claude 선택은 이미지 생성기를 변경하지 않습니다. 선택한 모델의 비용은 기존 사이트별·글별 예산에 포함됩니다.</p>
+          {Object.entries(models.providers).map(([provider,state]:any)=><small key={provider}>{provider}: {state.ready?"API 모델 목록 확인 완료":state.error}</small>)}
+          <button className="button-primary" disabled={modelBusy} onClick={()=>{setModelBusy(true);setModelMessage("");void api("ai-models",{method:"PUT",body:JSON.stringify(models.selected)}).then(()=>{setModelMessage("저장했습니다. 다음 단계부터 선택한 모델을 사용합니다.");return api("settings").then(setData);}).catch(e=>setError(e.message)).finally(()=>setModelBusy(false));}}>{modelBusy?"확인·저장 중…":"AI 모델 설정 저장"}</button>
+          <p role="status">{modelMessage}</p>
+        </>}
       </section>
       <div className="integration-grid">
         {workspaces.map((w) => {

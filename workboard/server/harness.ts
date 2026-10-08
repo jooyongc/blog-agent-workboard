@@ -1,3 +1,4 @@
+import {applyModelSettings} from "./model-settings";
 import { importLicensedMedia } from "./media-import";
 import type { Env } from "./env";
 import type { DraftInput } from "../shared/types";
@@ -453,8 +454,10 @@ export async function advanceHarness(env: Env) {
   )
     .bind(step, task.job_id, task.stage, now)
     .run();
+  env = await applyModelSettings(env);
   const payload = JSON.parse(task.payload_json),
     w = await workspace(env, task.site_id);
+  env = {...env, MEDIA_GENERATION_REVISION: payload.photo_retry_revision || 3};
   await env.WORKBOARD_DB.prepare(
     "UPDATE content_jobs SET status=?,error=NULL,updated_at=? WHERE id=?",
   )

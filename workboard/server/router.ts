@@ -1,3 +1,4 @@
+import {applyModelSettings,modelCatalog,saveModels} from "./model-settings";
 import type { DraftInput, Workspace } from "../shared/types";
 import type { Context } from "./env";
 import { authenticated, equalSecret, makeSession, sessionCookie } from "./auth";
@@ -67,6 +68,7 @@ export async function onRequest({
         !(await equalSecret(token, env.SCHEDULER_TOKEN))
       )
         throw new HttpError(401, "스케줄러 인증이 필요합니다.");
+      env = await applyModelSettings(env);
       if (route === "internal/harness") return json(await advanceHarness(env));
       const input = await body<{ dry_run?: boolean }>(request);
       return json(await tick(env, Date.now(), input.dry_run === true));
@@ -126,6 +128,9 @@ export async function onRequest({
     }
     if (!(await authenticated(request, env)))
       throw new HttpError(401, "로그인이 필요합니다.");
+    env = await applyModelSettings(env);
+    if(route === "ai-models" && method === "GET")return json(await modelCatalog(env));
+    if(route === "ai-models" && method === "PUT"){const result=await saveModels(env,await body(request));wakeHarness(env,waitUntil);return json(result);}
     if (route === "media-library/search" && method === "GET") {
       const w = await workspace(env, url.searchParams.get("site_id") || "");
       const query = url.searchParams.get("query") || w.strategy.pillars[0];
@@ -545,12 +550,18 @@ export async function onRequest({
       const i = await body<{ site_id: string; job_id: string }>(request);
       await workspace(env, i.site_id);
       const f = await env.WORKBOARD_DB.prepare(
-        "SELECT stage,status FROM agent_workflows WHERE job_id=? AND site_id=?",
+        "SELECT stage,status,payload_json FROM agent_workflows WHERE job_id=? AND site_id=?",
       )
         .bind(i.job_id, i.site_id)
-        .first<{ stage: string; status: string }>();
-      if (!f || !["failed", "interrupted"].includes(f.status))
+        .first<{ stage: string; status: string; payload_json:string }>();
+      if (!f || !["failed", "interrupted", "media_wait"].includes(f.status))
         throw new HttpError(409, "재개할 실패 단계가 없습니다.");
+      if(f.status === "media_wait"){
+        const payload=JSON.parse(f.payload_json);
+        if(payload.photo_retry_revision)throw new HttpError(409,"새 후보 재시도는 이미 사용했습니다. 주제에 맞는 원본을 등록하세요.");
+        payload.photo_retry_revision=4;
+        await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET payload_json=? WHERE job_id=? AND site_id=? AND status='media_wait'").bind(JSON.stringify(payload),i.job_id,i.site_id).run();
+      }
       if (f.stage === "publisher") {
         const uncertain = await env.WORKBOARD_DB.prepare(
           "SELECT job_id FROM publication_receipts WHERE job_id=? AND remote_json IS NULL LIMIT 1",
@@ -671,7 +682,7 @@ export async function onRequest({
         database_ready: !!env.WORKBOARD_DB,
         workspaces: await Promise.all(catalog.map((w) => readiness(w, env))),
         scheduler: "blog-agent-workboard-scheduler",
-        blogger_owner: "cloudflare",
+        blogger_owner: "aside",
       });
     if (route === "reports" && method === "GET") {
       const w = await workspace(

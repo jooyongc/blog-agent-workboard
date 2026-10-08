@@ -4,6 +4,9 @@ import { requestGemini, parseGemini } from "./gemini";
 import { budgetSettings } from "./budget";
 export type ModelId =
   | "claude-haiku-4-5"
+  | "claude-haiku-5-5"
+  | "gemini-3.5-flash-lite"
+  | "claude-opus-5-5"
   | "claude-sonnet-5-5"
   | "gemini-2.5-flash"
   | "gemini-3.1-flash-lite"
@@ -12,6 +15,9 @@ export type ModelId =
   | "gemini-3.1-pro-preview";
 export const MODEL_RATES = {
   "claude-haiku-4-5": { input: 1, output: 5 },
+  "claude-haiku-5-5": { input: 0.1, output: 0.5 },
+  "gemini-3.5-flash-lite": { input: 0.3, output: 2.5 },
+  "claude-opus-5-5": { input: 4, output: 20 },
   "claude-sonnet-5-5": { input: 2, output: 10 },
   "gemini-2.5-flash": { input: 0.3, output: 2.5 },
   "gemini-3.1-flash-lite": { input: 0.25, output: 1.5 },
@@ -20,19 +26,22 @@ export const MODEL_RATES = {
   "gemini-3.1-pro-preview": { input: 2, output: 12 },
 } as const;
 export function workerModel(env: Env): ModelId {
+  if(env.AI_WORKER_MODEL && Object.hasOwn(MODEL_RATES,env.AI_WORKER_MODEL))return env.AI_WORKER_MODEL as ModelId;
   return env.AI_PROVIDER === "gemini"
     ? "gemini-3.1-flash-lite"
     : "claude-haiku-4-5";
 }
 export function reviewModel(env: Env): ModelId {
+  if(env.AI_REVIEW_MODEL && Object.hasOwn(MODEL_RATES,env.AI_REVIEW_MODEL))return env.AI_REVIEW_MODEL as ModelId;
   return env.AI_PROVIDER === "gemini"
     ? "gemini-3.1-pro-preview"
     : "claude-sonnet-5-5";
 }
 export function editorModel(env: Env): ModelId {
-  return env.AI_PROVIDER === "gemini" ? workerModel(env) : reviewModel(env);
+  return env.AI_WORKER_MODEL ? workerModel(env) : env.AI_PROVIDER === "gemini" ? workerModel(env) : reviewModel(env);
 }
 function modelRates(model: ModelId, tokens: number) {
+  if(model === "claude-haiku-5-5" && tokens > 100000)return {input:0.5,output:2.5};
   if (model === "gemini-3.1-pro-preview" && tokens > 200000)
     return { input: 4, output: 18 };
   if (
@@ -96,8 +105,7 @@ export async function modelJson(
   model: ModelId = workerModel(env),
   images?: { mimeType: string; data: string }[],
 ) {
-  if (search?.length && model.startsWith("gemini-"))
-    model = "gemini-3.1-flash-lite";
+
   const gemini = model.startsWith("gemini-");
   const apiKey = gemini ? env.GEMINI_API_KEY : env.ANTHROPIC_API_KEY;
   if (env.AI_ENABLED !== "true" || !apiKey)
@@ -177,7 +185,7 @@ export async function modelJson(
             model,
             max_tokens: maxTokens,
             system,
-            messages: [{ role: "user", content: JSON.stringify(input) }],
+            messages: [{ role: "user", content: images?.length ? [{type:"text",text:JSON.stringify(input)},...images.map(image=>({type:"image",source:{type:"base64",media_type:image.mimeType,data:image.data}}))] : JSON.stringify(input) }],
             ...(search?.length
               ? {
                   tools: [

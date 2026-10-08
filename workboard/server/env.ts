@@ -13,6 +13,9 @@ export type Env = {
   NATIVE_BLOG_SUPABASE_KEY?: string;
   ANTHROPIC_API_KEY?: string;
   GEMINI_API_KEY?: string;
+  AI_WORKER_MODEL?: string;
+  AI_REVIEW_MODEL?: string;
+  MEDIA_GENERATION_REVISION?: number;
   AI_PROVIDER?: string;
   AI_ENABLED?: string;
 };
