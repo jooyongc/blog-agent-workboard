@@ -7,6 +7,10 @@ import { insertStockPhotos } from "./media";
 import { HttpError } from "./http";
 export const SUPERVISOR_MODEL = "claude-sonnet-5-5" as const;
 export const MAX_SUPERVISOR_ROUNDS = 3;
+export function planFinalCorrection(payload:any,decision:any){
+ if(decision.action!=="edit" || decision.round!==MAX_SUPERVISOR_ROUNDS || payload.final_repair_attempted)return false;
+ payload.final_repair_attempted=true;payload.final_repair_state="assigned";return true;
+}
 type Evidence = Record<
   string,
   {
@@ -50,7 +54,7 @@ export function prepareForReview(
   evidence: { sources: Evidence[string]["sources"] },
   lang: string,
 ): Article {
-  let md = article.content_md;
+  let md = article.content_md.replace(/^\s*\[Reviewed contextual image\]\s*$/gm, "");
   let description = article.meta_description.trim();
   if (description.length > 160) {
     const prefix = description.slice(0, 159);
@@ -66,7 +70,7 @@ export function prepareForReview(
       .split("\n")
       .filter(
         (line) =>
-          !(line.trim().startsWith("*Photo:") && line.includes(photo.page)),
+          !((line.trim().startsWith("*Photo:") && line.includes(photo.page)) || /^\*AI-generated illustration/.test(line.trim())),
       )
       .join("\n");
   }
@@ -192,7 +196,7 @@ function compactArticle(article: Article) {
       .join("\n"),
   };
 }
-function compactEvidence(evidence: Evidence) {
+function compactEvidence(evidence: Evidence, previous:Supervision[] = []) {
   return Object.fromEntries(
     Object.entries(evidence).map(([lang, brief]) => [
       lang,
@@ -204,7 +208,7 @@ function compactEvidence(evidence: Evidence) {
               {
                 url: source.url,
                 claim: source.claim,
-                evidence: source.evidence,
+                evidence: previous.length ? [source.evidence.slice(0,6000),...previous.flatMap(d=>d.claims.filter(c=>c.status==="verified"&&c.source_url===source.url&&typeof c.evidence_quote==="string").map(c=>{const at=source.evidence.indexOf(c.evidence_quote!);return at>=6000?source.evidence.slice(Math.max(0,at-250),at+650):"";}))].filter(Boolean).join("\n") : source.evidence,
               },
             ]),
           ).values(),
@@ -220,7 +224,7 @@ export async function supervise(
 ): Promise<Supervision> {
   const model = reviewModel(env);
   const round = (payload.supervisor_rounds || 0) + 1;
-  if (round > MAX_SUPERVISOR_ROUNDS)
+  if (round > MAX_SUPERVISOR_ROUNDS + (payload.final_repair_attempted ? 1 : 0))
     throw new HttpError(
       409,
       "상위 검토의 자동 보완 횟수를 모두 사용했습니다. 새로운 근거 또는 지시가 필요합니다.",
@@ -241,7 +245,7 @@ export async function supervise(
           compactArticle(payload.input.translations[lang]),
         ]),
       ),
-      research_evidence: compactEvidence(payload.research.briefs),
+      research_evidence: compactEvidence(payload.research.briefs,payload.final_repair_attempted ? payload.supervision || [] : []),
       previous_verification: payload.quality?.verification,
       structure: Object.fromEntries(
         w.languages.map((l) => [
@@ -252,14 +256,14 @@ export async function supervise(
           },
         ]),
       ),
-      history: (payload.supervision || []).map((d: Supervision) => ({
+      history: (payload.final_repair_attempted ? (payload.supervision || []).slice(-1) : payload.supervision || []).map((d: Supervision) => ({
         action: d.action,
         reason: d.reason,
         instructions: d.instructions,
       })),
       round,
     },
-    model.startsWith("gemini-") && w.languages.length === 1
+    payload.final_repair_attempted && w.languages.length === 1 ? 6000 : model.startsWith("gemini-") && w.languages.length === 1
       ? (payload.user_resume_20261007 ? 4000 : 6000)
       : 12000,
     undefined,
@@ -302,14 +306,14 @@ export async function editUnderSupervision(
             (c) => c.lang === lang && c.status !== "verified",
           ),
         },
-        research: compactEvidence({ [lang]: payload.research.briefs[lang] })[
+        research: compactEvidence({ [lang]: payload.research.briefs[lang] },payload.final_repair_attempted ? payload.supervision || [] : [])[
           lang
         ],
         today: new Date().toISOString().slice(0, 10),
       },
       7000,
       undefined,
-      editorModel(env),
+      payload.final_repair_attempted ? reviewModel(env) : editorModel(env),
     );
     if (!validateArticle(result.data))
       throw new HttpError(
@@ -328,5 +332,6 @@ export async function editUnderSupervision(
     );
     payload.editor_completed[decision.run_id].push(lang);
   }
+  if(payload.final_repair_attempted)payload.final_repair_state="edited";
   delete payload.supervisor_approval;
 }

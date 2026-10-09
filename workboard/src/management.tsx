@@ -1493,6 +1493,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                     </ol>
                   </details>
                   {j.error && <p role={j.status === "media_wait" ? "status" : "alert"}>{j.error}</p>}
+                  {data?.workflows?.some((f:any)=>f.job_id===j.id&&["assigned","edited"].includes(f.final_repair_state)) && <p role="status">일반 보완에 반복 실패해 상위 검토 모델이 직접 한 차례 보완하고 최종 검증합니다.</p>}
                   {data?.workflows?.some((f:any)=>f.job_id===j.id&&f.media_recovery_json&&JSON.parse(f.media_recovery_json).state==="retrying") && <p role="status">이미지 자동 보완 중: 반려 이유에 맞춰 구도를 변경하고 승인된 이미지는 재사용합니다.</p>}
                   {j.status === "media_wait" && (
                     <p>

@@ -28,6 +28,7 @@ import {
   prepareForReview,
   articleFingerprint,
   MAX_SUPERVISOR_ROUNDS,
+  planFinalCorrection,
   SUPERVISOR_MODEL,
 } from "./supervisor";
 import { creativeAsset, fireflyReady, PendingMedia } from "./firefly";
@@ -303,6 +304,9 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
       resume = true;
     }
     const rejectedApproval=payload.supervision?.at(-1);
+    if(task.status === "failed" && stage === "supervisor" && task.error?.includes("자동 보완 한도") && rejectedApproval && planFinalCorrection(payload,rejectedApproval)){
+      stage="editor";resume=true;
+    }
     if(task.status === "failed" && stage === "supervisor" && !payload.invalid_approval_instruction_recovery && rejectedApproval?.action === "edit" && /no further edits|no edits required/i.test(rejectedApproval.instructions || "") && rejectedApproval.claims?.some((c:any)=>c.status!=="verified")) {
       rejectedApproval.instructions="Remove these unsupported claims everywhere, including introduction, body, tables and FAQ: " + JSON.stringify(rejectedApproval.claims.filter((c:any)=>c.status!=="verified").map((c:any)=>({lang:c.lang,claim:c.claim,source_url:c.source_url}))) + ". Do not follow the stale no-edit instruction. Preserve reviewed images and retain only facts backed by exact supplied evidence.";
       payload.invalid_approval_instruction_recovery=true;
@@ -627,6 +631,7 @@ export async function advanceHarness(env: Env) {
       payload.supervisor_rounds = decision.round;
       payload.supervision = [...(payload.supervision || []), decision];
       if (decision.action === "approve") {
+        if(payload.final_repair_attempted)payload.final_repair_state="complete";
         payload.quality = {
           languages: Object.fromEntries(
             w.languages.map((l) => [
@@ -644,6 +649,8 @@ export async function advanceHarness(env: Env) {
         };
         payload.supervisor_approval = await articleFingerprint(payload.input);
         repairNext = "publisher";
+      } else if (planFinalCorrection(payload,decision)) {
+        repairNext="editor";
       } else if (
         decision.action === "edit" &&
         decision.round < MAX_SUPERVISOR_ROUNDS
@@ -729,7 +736,7 @@ export async function advanceHarness(env: Env) {
             task.stage === "supervisor"
               ? reviewModel(env)
               : task.stage === "editor"
-                ? editorModel(env)
+                ? payload.final_repair_attempted ? reviewModel(env) : editorModel(env)
                 : ["researcher", "writer", "verifier"].includes(task.stage)
                   ? task.stage === "researcher" && env.AI_PROVIDER === "gemini"
                     ? "gemini-3.1-flash-lite"

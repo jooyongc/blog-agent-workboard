@@ -1,3 +1,4 @@
+import {planFinalCorrection} from "../server/supervisor";
 import {ImageCandidatesRejected,planMediaRecovery,recoveryScene} from "../server/media-recovery";
 import {ProviderWait} from "../server/model";
 import {researchSearchQueries,topicSourceFilter,assertTopicEvidence} from "../server/strategy";
@@ -1843,4 +1844,16 @@ test("photo workflow recovers confirmed rejection once then waits for originals 
   const second=await advanceHarness(env) as any;assert.equal(second.media_wait,true);
   row=d.sqlite.prepare("SELECT status,payload_json FROM agent_workflows WHERE job_id='bounded-photo'").get() as any;assert.equal(row.status,"media_wait");assert.equal(JSON.parse(row.payload_json).media_recovery.state,"needs_resource");assert.ok(JSON.parse(row.payload_json).input);assert.equal(calls,0);
  }finally{globalThis.fetch=before;}
+});
+
+test("repeated editorial misses escalate once to senior correction, not unlimited review rounds",()=>{
+ const p:any={};assert.equal(planFinalCorrection(p,{action:"edit",round:2}),false);assert.equal(planFinalCorrection(p,{action:"edit",round:3}),true);assert.equal(p.final_repair_state,"assigned");assert.equal(planFinalCorrection(p,{action:"edit",round:3}),false);assert.equal(planFinalCorrection({}, {action:"research",round:3}),false);
+});
+test("exhausted ordinary edit workflow is recovered only once at its existing senior assignment",async()=>{
+ const {env,d}=environment();const {w,input,research,decision}=supervisorFixture();
+ const payload={slug:input.slug,input,research,supervisor_rounds:3,supervision:[{...decision,action:"edit",round:3,run_id:"final-fix",instructions:"Delete unsupported statement"}]};
+ d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('senior-final',?,?,?,'culture','{}','review','now','now')").run(w.site_id,input.slug,input.translations.en.title);
+ d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,error,created_at,updated_at) VALUES('senior-final','final-topic',?,'supervisor','failed',?,'자동 보완 한도에 도달했습니다.','now','now')").run(w.site_id,JSON.stringify(payload));
+ await recoverWorkflows(env);let row=d.sqlite.prepare("SELECT stage,status,payload_json FROM agent_workflows").get() as any;assert.equal(row.stage,"editor");assert.equal(row.status,"pending");assert.equal(JSON.parse(row.payload_json).supervisor_rounds,3);assert.equal(JSON.parse(row.payload_json).final_repair_attempted,true);
+ d.sqlite.prepare("UPDATE agent_workflows SET stage='supervisor',status='failed'").run();await recoverWorkflows(env);row=d.sqlite.prepare("SELECT status FROM agent_workflows").get() as any;assert.equal(row.status,"failed");
 });
