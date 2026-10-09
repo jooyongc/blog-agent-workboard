@@ -214,6 +214,20 @@ export function reconcileSources(
     distinct: new Set(accepted.map((a) => normalizeUrl(a.url))).size,
   };
 }
+export function researchSearchQueries(title:string,domains:string[]){
+ const topic=title.replace(/[^\p{L}\p{N}\s'-]/gu," ").replace(/\s+/g," ").trim().slice(0,180);
+ return domains.map(domain=>`site:${domain} ${topic} primary source definitions evidence`);
+}
+export function topicSourceFilter(title:string,sources:any[]){
+ if(!/k[ -]?pop|fandom/i.test(title))return sources;
+ return sources.filter(source=>typeof source.evidence==="string" && /\bbias\b|\bstan\b|\bfandom\b|k[ -]?pop.{0,80}(?:dictionary|glossary)|(?:dictionary|glossary).{0,80}k[ -]?pop/i.test(source.evidence));
+}
+export function assertTopicEvidence(title:string,sources:any[]){
+ if(!/k[ -]?pop|fandom/i.test(title))return;
+ const text=sources.map(s=>s.evidence).join("\n");
+ const missing=["bias","stan"].filter(term=>new RegExp(`\\b${term}\\b`,"i").test(title)&&!new RegExp(`\\b${term}\\b`,"i").test(text));
+ if(missing.length)throw new HttpError(409,`주제의 핵심 용어(${missing.join(", ")})를 설명하는 출처 원문이 없습니다. 주제와 맞는 출처를 추가하세요.`);
+}
 export async function research(
   env: Env,
   siteId: string,
@@ -257,7 +271,7 @@ export async function research(
         4000,
         domains,
       );
-    let outcome = reconcileSources(r.data.sources, r.evidence_urls, domains);
+    let outcome = reconcileSources(topicSourceFilter(title,r.data.sources || []), r.evidence_urls, domains);
     if (
       outcome.distinct < 2 &&
       r.evidence_urls.length &&
@@ -276,7 +290,7 @@ export async function research(
         3500,
       );
       const second = reconcileSources(
-        repaired.data.sources,
+        topicSourceFilter(title,repaired.data.sources || []),
         r.evidence_urls,
         domains,
       );
@@ -296,13 +310,11 @@ export async function research(
       const extra = await modelJson(
         env,
         key,
-        `Find additional official PRIMARY source pages for ${w.name}. Existing official sources must be preserved. Search for official tourist restaurant information, Korean food menus, vegetarian options and dining etiquette relevant to the topic. Use specific official-page queries; do not insist on the entire article title matching one page. Avoid blogs. Use Google Search and provide concise cited findings.`,
+        `Find additional official PRIMARY source pages for ${w.name}. Existing official sources must be preserved. Search for source pages that directly explain the actual topic and the supervisor assignment. Do not substitute unrelated food, travel or etiquette pages for a culture, fandom or language topic. Use specific official-page queries; do not insist on the entire article title matching one page. Avoid blogs. Use Google Search and provide concise cited findings.`,
         {
           ...input,
           existing_source_urls: outcome.accepted.map((source) => source.url),
-          search_queries: domains.map(
-            (domain) => `site:${domain} Korean food restaurant dining guide`,
-          ),
+          search_queries: researchSearchQueries(title,domains),
         },
         4000,
         domains,
@@ -311,7 +323,7 @@ export async function research(
       outcome = reconcileSources(
         [
           ...outcome.accepted,
-          ...(Array.isArray(extra.data.sources) ? extra.data.sources : []),
+          ...topicSourceFilter(title,Array.isArray(extra.data.sources) ? extra.data.sources : []),
         ],
         combined,
         domains,
@@ -339,6 +351,7 @@ export async function research(
             : ""
         }`.slice(0, 400),
       );
+    assertTopicEvidence(title,outcome.accepted);
     const data = {
       ...r.data,
       sources: outcome.accepted,

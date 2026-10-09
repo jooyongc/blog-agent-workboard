@@ -76,6 +76,7 @@ export type VerificationReport = {
   reason: string;
   verified: number;
   claims: VerificationClaim[];
+  audited_claims?: VerificationClaim[];
 };
 export async function verifyGenerated(
   env: Env,
@@ -203,7 +204,7 @@ export async function verifyGenerated(
             ? ": " + r.data.reason.trim().slice(0, 300)
             : "."
         }`;
-  return { passed, reason, verified, claims: failing.slice(0, 40) };
+  return { passed, reason, verified, claims: failing.slice(0, 40), audited_claims: claims };
 }
 export function researchEvidence(input: DraftInput, w: Workspace) {
   const evidence: Record<

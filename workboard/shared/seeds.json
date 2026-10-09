@@ -763,7 +763,11 @@
       "min_score": 70,
       "required_images": 2,
       "affiliate_disclosure": "",
-      "source_domains": ["english.visitkorea.or.kr", "english.visitseoul.net"],
+      "source_domains": ["english.visitkorea.or.kr", "english.visitseoul.net",
+        "korea.net",
+        "korean-culture.org",
+        "merriam-webster.com"
+      ],
       "audience": "English readers exploring Korean culture and trends",
       "voice": "Explain the why and cultural context. Distinguish evidence from opinion. No invented rankings, dates or claims.",
       "pillars": [

@@ -4,11 +4,11 @@ export function extractFaq(md: string) {
   const lines = md.split(/\r?\n/);
   const faq: { question: string; answer: string }[] = [];
   for (let i = 0; i < lines.length; i++) {
-    const question = lines[i].trim().match(/^(?:\*\*)?Q:\s*(.+?)(?:\*\*)?$/);
+    const question = lines[i].trim().match(/^(?:\*\*)?Q:(?:\*\*)?\s*(.+?)(?:\*\*)?$/);
     if (!question) continue;
     let next = i + 1;
     while (next < lines.length && !lines[next].trim()) next++;
-    const answer = lines[next]?.trim().match(/^A:\s*(.+)$/);
+    const answer = lines[next]?.trim().match(/^(?:\*\*)?A:(?:\*\*)?\s*(.+)$/);
     if (!answer) continue;
     const answerLines = [answer[1]];
     let end = next + 1;

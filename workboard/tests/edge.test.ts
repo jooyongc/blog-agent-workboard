@@ -1,3 +1,4 @@
+import {researchSearchQueries,topicSourceFilter,assertTopicEvidence} from "../server/strategy";
 import {applyModelSettings,saveModels} from "../server/model-settings";
 import {importLicensedMedia} from "../server/media-import";
 import {generatedPhoto,reviewPhoto,imageCost,assertReviewedPhotos} from "../server/generated-media";
@@ -929,6 +930,7 @@ test("verifier reports the unsupported claims instead of a bare failure", async 
     assert.equal(modelCalls, 1);
     assert.equal(report.passed, false);
     assert.equal(report.verified, 1);
+    assert.ok((report.audited_claims?.length || 0) >= 2);
     assert.deepEqual(
       report.claims.map((c) => c.claim),
       ["The village dates back 600 years"],
@@ -1787,4 +1789,14 @@ test("media resume starts one new candidate batch while retaining article and bi
  const row=d.sqlite.prepare("SELECT status,payload_json FROM agent_workflows WHERE job_id='media-retry'").get() as any;const p=JSON.parse(row.payload_json);assert.equal(row.status,"pending");assert.equal(p.photo_retry_revision,4);assert.equal(p.input.saved,true);assert.equal(p.research.saved,true);
  d.sqlite.prepare("UPDATE agent_workflows SET status='media_wait' WHERE job_id='media-retry'").run();
  assert.equal((await request("automation/retry",env,{method:"POST",body:JSON.stringify({site_id:"koreadecode",job_id:"media-retry"})})).status,409);
+});
+
+test("culture fallback search preserves the topic and excludes irrelevant official pages",()=>{
+ const q=researchSearchQueries("K-pop Bias and Stan",["korea.net"]);assert.ok(q[0].includes("Bias and Stan"));assert.equal(q[0].includes("restaurant"),false);
+ const wrong={evidence:"Temple food and palace visit etiquette",claim:"bias stan"};const right={evidence:"K-pop fandom: bias means a favorite idol; stan means a devoted fan"};
+ assert.deepEqual(topicSourceFilter("K-pop Bias and Stan",[wrong,right]),[right]);
+ assert.throws(()=>assertTopicEvidence("K-pop Bias and Stan",[wrong]),/핵심/);assert.doesNotThrow(()=>assertTopicEvidence("K-pop Bias and Stan",[right]));
+});
+test("FAQ extraction accepts bold question and answer labels",()=>{
+ assert.deepEqual(extractFaq("**Q:** What is bias?\n**A:** A favorite idol.\n\n**Q:** What is stan?\n**A:** A devoted fan."),[{question:"What is bias?",answer:"A favorite idol."},{question:"What is stan?",answer:"A devoted fan."}]);
 });
