@@ -532,7 +532,7 @@ export async function onRequest({
         runs: r.results,
         workflows: (
           await env.WORKBOARD_DB.prepare(
-            "SELECT job_id,topic_id,stage,status,error,json_extract(payload_json,'$.recovery') AS recovery_json,json_extract(payload_json,'$.supervision') AS supervision_json,json_extract(payload_json,'$.supervisor_rounds') AS supervisor_rounds FROM agent_workflows WHERE site_id=? ORDER BY created_at DESC LIMIT 100",
+            "SELECT job_id,topic_id,stage,status,error,json_extract(payload_json,'$.media_recovery') AS media_recovery_json,json_extract(payload_json,'$.photo_retry_revision') AS photo_retry_revision,json_extract(payload_json,'$.recovery') AS recovery_json,json_extract(payload_json,'$.supervision') AS supervision_json,json_extract(payload_json,'$.supervisor_rounds') AS supervisor_rounds FROM agent_workflows WHERE site_id=? ORDER BY created_at DESC LIMIT 100",
           )
             .bind(id)
             .all()

@@ -1,3 +1,5 @@
+import {ImageCandidatesRejected,planMediaRecovery,recoveryScene} from "../server/media-recovery";
+import {ProviderWait} from "../server/model";
 import {researchSearchQueries,topicSourceFilter,assertTopicEvidence} from "../server/strategy";
 import {applyModelSettings,saveModels} from "../server/model-settings";
 import {importLicensedMedia} from "../server/media-import";
@@ -1799,4 +1801,46 @@ test("culture fallback search preserves the topic and excludes irrelevant offici
 });
 test("FAQ extraction accepts bold question and answer labels",()=>{
  assert.deepEqual(extractFaq("**Q:** What is bias?\n**A:** A favorite idol.\n\n**Q:** What is stan?\n**A:** A devoted fan."),[{question:"What is bias?",answer:"A favorite idol."},{question:"What is stan?",answer:"A devoted fan."}]);
+});
+
+test("confirmed visual rejection schedules only one adaptive batch and unknown outcomes do not",()=>{
+ const payload:any={input:{saved:true},recovery:{old:true}};
+ assert.equal(planMediaRecovery(payload,new Error("Unknown paid response")),false);
+ assert.equal(planMediaRecovery(payload,new ImageCandidatesRejected(1,["가짜 문자", "손가락 왜곡"])),true);
+ assert.equal(payload.photo_retry_revision,4);assert.equal(payload.input.saved,true);assert.equal(payload.media_recovery.slot,1);
+ assert.equal(planMediaRecovery(payload,new ImageCandidatesRejected(1,["Rejected again"])),false);
+ assert.ok(recoveryScene("K-pop fandom",["손가락 왜곡"]).includes("without people"));
+});
+test("adaptive batch reuses an already approved slot without a paid request",async()=>{
+ const {env,d}=environment();Object.assign(env,{AI_PROVIDER:"gemini",GEMINI_IMAGES_ENABLED:"true",GEMINI_API_KEY:"test",NATIVE_BLOG_SUPABASE_KEY:"test",MEDIA_GENERATION_REVISION:4});
+ const photo={id:"koreabylocal-cache-photo-gemini-image-v3-0-0",url:"https://test.supabase.co/one.jpg",visual_review:{approved:true,policy:"korea-topic-no-text-v2"}};
+ d.sqlite.prepare("INSERT INTO creative_requests(id,site_id,kind,prompt,status,result_json,created_at,updated_at) VALUES(?,'koreabylocal','image','old','complete',?,'now','now')").run(photo.id,JSON.stringify(photo));
+ const before=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw Error("No paid retry");};
+ try{const restored=await generatedPhoto(env,"koreabylocal","cache-photo","Korean scene",0);assert.equal(restored.id,photo.id);assert.equal(restored.fresh,false);assert.equal(calls,0);}finally{globalThis.fetch=before;}
+});
+test("temporary original image fetch failure is retryable before making a paid review call",async()=>{
+ const {env}=environment();const before=globalThis.fetch;let calls=0;
+ globalThis.fetch=async()=>{calls++;return new Response("temporary",{status:503});};
+ try{await assert.rejects(()=>reviewPhoto(env,"koreabylocal","fetch-wait","Seoul",{id:"one",provider:"Adobe Stock",url:"https://agkkvtfwqmzgbrqhvohs.supabase.co/storage/v1/object/public/workboard-media/adobe/one.jpg",page:"https://stock.adobe.com/images/one",photographer:"Author",photographer_url:"https://stock.adobe.com",alt:"Seoul Korea",license_url:"https://stock.adobe.com/license-terms"}),ProviderWait);assert.equal(calls,1);}finally{globalThis.fetch=before;}
+});
+
+test("photo workflow recovers confirmed rejection once then waits for originals without paid loops",async()=>{
+ const {env,d}=environment();Object.assign(env,{AI_PROVIDER:"gemini",GEMINI_API_KEY:"test",GEMINI_IMAGES_ENABLED:"true",NATIVE_BLOG_SUPABASE_KEY:"test",MEDIA_POLICY:"adobe-generated"});
+ const {w,input}=supervisorFixture();input.translations.en.images=[];input.translations.en.primary_keyword="unique-media-recovery";
+ const slug="bounded-photo-recovery",payload={slug,title:input.translations.en.title,input};
+ d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('bounded-photo',?,?,?,'culture','{}','agent_pending','now','now')").run(w.site_id,slug,payload.title);
+ d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES('bounded-photo','bounded-topic',?,'photo_editor','pending',?,'now','now')").run(w.site_id,JSON.stringify(payload));
+ const insert=d.sqlite.prepare("INSERT INTO creative_requests(id,site_id,kind,prompt,status,result_json,created_at,updated_at) VALUES(?,?,?,'old','complete',?,'now','now')");
+ for(const rev of [3,4])for(const variant of [0,1]){
+  const id=w.site_id+'-'+slug+'-gemini-image-v'+rev+'-0-'+variant;const review={approved:false,reason:"가짜 문자와 손가락 왜곡",policy:"korea-topic-no-text-v2"};
+  const photo={id,url:"https://agkkvtfwqmzgbrqhvohs.supabase.co/storage/v1/object/public/workboard-media/gemini/test.jpg",alt:"Seoul Korea",provider:"Gemini",visual_review:review};
+  insert.run(id,w.site_id,"image",JSON.stringify(photo));insert.run(w.site_id+'-'+slug+'-visual-v2-'+id,w.site_id,"visual_review",JSON.stringify(review));
+ }
+ const before=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw Error("No duplicate paid calls");};
+ try{
+  const first=await advanceHarness(env) as any;assert.equal(first.recovering,true);
+  let row=d.sqlite.prepare("SELECT status,payload_json FROM agent_workflows WHERE job_id='bounded-photo'").get() as any;assert.equal(row.status,"pending");assert.equal(JSON.parse(row.payload_json).photo_retry_revision,4);
+  const second=await advanceHarness(env) as any;assert.equal(second.media_wait,true);
+  row=d.sqlite.prepare("SELECT status,payload_json FROM agent_workflows WHERE job_id='bounded-photo'").get() as any;assert.equal(row.status,"media_wait");assert.equal(JSON.parse(row.payload_json).media_recovery.state,"needs_resource");assert.ok(JSON.parse(row.payload_json).input);assert.equal(calls,0);
+ }finally{globalThis.fetch=before;}
 });

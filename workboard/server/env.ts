@@ -16,6 +16,7 @@ export type Env = {
   AI_WORKER_MODEL?: string;
   AI_REVIEW_MODEL?: string;
   MEDIA_GENERATION_REVISION?: number;
+  MEDIA_RECOVERY_REASONS?: string[];
   AI_PROVIDER?: string;
   AI_ENABLED?: string;
 };

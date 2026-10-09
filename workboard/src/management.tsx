@@ -1492,11 +1492,12 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                         ))}
                     </ol>
                   </details>
-                  {j.error && <p role="alert">{j.error}</p>}
+                  {j.error && <p role={j.status === "media_wait" ? "status" : "alert"}>{j.error}</p>}
+                  {data?.workflows?.some((f:any)=>f.job_id===j.id&&f.media_recovery_json&&JSON.parse(f.media_recovery_json).state==="retrying") && <p role="status">이미지 자동 보완 중: 반려 이유에 맞춰 구도를 변경하고 승인된 이미지는 재사용합니다.</p>}
                   {j.status === "media_wait" && (
                     <p>
                       출처 조사와 글 작성은 저장돼 있습니다. 아래 미디어 등록에
-                      주제와 맞는 원본을 올리면 사진 선정부터 이어집니다.
+                      주제와 맞는 원본을 올리면 사진 선정부터 이어집니다. 자동 후보 보완까지 사용한 경우 원본 등록이 필요합니다. 글은 다시 작성하지 않습니다.
                     </p>
                   )}
                   {recovery?.retry_at && (
@@ -1537,6 +1538,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                   ) && (
                     <button
                       className="button-secondary"
+                      disabled={j.status === "media_wait" && data?.workflows?.some((f:any)=>f.job_id===j.id&&f.photo_retry_revision)}
                       onClick={() =>
                         void api("automation/retry", {
                           method: "POST",

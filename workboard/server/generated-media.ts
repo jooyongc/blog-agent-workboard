@@ -1,3 +1,4 @@
+import {ImageCandidatesRejected,recoveryScene} from "./media-recovery";
 import type { Env } from "./env";
 import type { StockPhoto } from "./media";
 import { HttpError } from "./http";
@@ -184,18 +185,17 @@ export async function reviewPhoto(
   if (prior?.result_json)
     return { ...photo, visual_review: JSON.parse(prior.result_json) };
   ownedUrl(env, photo.url);
-  const response = await fetch(photo.url, {
-    redirect: "manual",
-    signal: AbortSignal.timeout(30000),
-  });
-  if (!response.ok)
-    throw new HttpError(502, "이미지 검토 원본을 읽지 못했습니다.");
+  let response:Response;
+  try{response=await fetch(photo.url,{redirect:"manual",signal:AbortSignal.timeout(30000)});}catch{throw new ProviderWait(503,30);}
+  if([404,429,500,502,503,504].includes(response.status))throw new ProviderWait(response.status,30);
+  if(!response.ok)throw new HttpError(409,"MEDIA_REVIEW: 이미지 원본 접근을 확인할 수 없습니다. 접근 가능한 원본을 등록하세요.");
   const mimeType = response.headers.get("Content-Type")?.split(";")[0] || "";
   if (!["image/png", "image/jpeg", "image/webp"].includes(mimeType))
     throw new HttpError(409, "MEDIA_REVIEW: 검토할 이미지 형식을 확인하세요.");
-  const data = await response.arrayBuffer();
+  let data:ArrayBuffer;
+  try{data=await response.arrayBuffer();}catch{throw new ProviderWait(503,30);}
   if (data.byteLength > 12 * 1024 * 1024)
-    throw new HttpError(413, "검토 이미지가 너무 큽니다.");
+    throw new HttpError(413, "MEDIA_REVIEW: 검토 이미지가 너무 큽니다. 12MB 이하 원본을 등록하세요.");
   const model = reviewModel(env);
   const audit = await modelJson(
     env,
@@ -276,7 +276,8 @@ async function createImage(
           ? "Show a Korean restaurant customer communicating with a server, with no menus, no papers, no windows, no screens, no signs: only Korean banchan and metal utensils on a table against a plain wall. All signs and menus must be blank."
           : "Show a close-up Korean meal with banchan, metal spoon and chopsticks, fresh vegetables and chili peppers. No menus, labels, signs or text."
         : `Illustrate ${topic} as a wordless scene in a recognizable South Korean setting, with no writing.`;
-  const prompt = `Create one high-quality, photographic-style wordless editorial illustration. South Korea only. SCENE: ${focus} ${slot % 2 === 0 ? "Wide scene showing the practical situation" : "Close-up detail illustrating a different aspect of this topic"}. ${variant ? "Use a simpler composition without faces or hands." : ""} Warm natural colors, clean realistic editorial illustration, 16:9. Korean context: if dining, use Korean banchan, metal spoon and chopsticks and Korean dishes; if transit, a contemporary Seoul transit setting without claiming a real station; if greetings, a culturally appropriate Korean gesture. No Japanese landmarks, tatami, torii, sushi, kimono or non-Korean cultural markers. ABSOLUTELY NO TEXT OR TYPOGRAPHY anywhere: no letters of any language, no Hangul, no English words, no numbers, no labels, menu writing, sign writing, speech bubbles or charts. Leave menus, screens and signs blank. Show only pictorial food and context. No logos, brands, prices or maps. No invented documentary evidence or named real locations. This is a labeled conceptual illustration, not a stock photo. Do not fetch or copy stock images.`;
+  const corrective=(env.MEDIA_GENERATION_REVISION === 4) ? recoveryScene(topic,env.MEDIA_RECOVERY_REASONS || []) : "";
+  const prompt = `${corrective} Create one high-quality, photographic-style wordless editorial illustration. South Korea only. SCENE: ${focus} ${slot % 2 === 0 ? "Wide scene showing the practical situation" : "Close-up detail illustrating a different aspect of this topic"}. ${variant ? "Use a simpler composition without faces or hands." : ""} Warm natural colors, clean realistic editorial illustration, 16:9. Korean context: if dining, use Korean banchan, metal spoon and chopsticks and Korean dishes; if transit, a contemporary Seoul transit setting without claiming a real station; if greetings, a culturally appropriate Korean gesture. No Japanese landmarks, tatami, torii, sushi, kimono or non-Korean cultural markers. ABSOLUTELY NO TEXT OR TYPOGRAPHY anywhere: no letters of any language, no Hangul, no English words, no numbers, no labels, menu writing, sign writing, speech bubbles or charts. Leave menus, screens and signs blank. Show only pictorial food and context. No logos, brands, prices or maps. No invented documentary evidence or named real locations. This is a labeled conceptual illustration, not a stock photo. Do not fetch or copy stock images.`;
   const run = await reserve(env, `${site}/${slug}`, prompt);
   const now = new Date().toISOString();
   const claim = cached
@@ -446,6 +447,8 @@ async function createImage(
           id,
         )
         .run();
+    if(!(e instanceof HttpError) && !(e instanceof ProviderWait))throw new HttpError(409,"MEDIA_REVIEW: 이미지 요청 결과 확인이 필요합니다. 유료 요청을 중복 실행하지 않고 원본 등록을 기다립니다.");
+    if(e instanceof HttpError && !e.message.includes("MEDIA_REVIEW") && !(e instanceof ProviderWait))throw new HttpError(409,"MEDIA_REVIEW: 생성 결과의 저장·형식 확인이 필요합니다. 원본 등록 후 재개합니다.");
     throw e;
   }
 }
@@ -461,6 +464,13 @@ export async function generatedPhoto(
       409,
       "MEDIA_REVIEW: 자동 이미지 생성 연결이 필요합니다.",
     );
+  // A fallback for one slot must not regenerate an already approved other slot.
+  for(const revision of [3,4])for(const variant of [0,1]){
+    const saved=await env.WORKBOARD_DB.prepare("SELECT result_json FROM creative_requests WHERE id=?").bind(`${site}-${slug}-gemini-image-v${revision}-${slot}-${variant}`).first<{result_json:string|null}>();
+    const photo=saved?.result_json?JSON.parse(saved.result_json):null;
+    if(photo?.visual_review?.approved && photo.visual_review.policy===VISUAL_POLICY)return {...photo,fresh:false};
+  }
+  const reasons:string[]=[];
   for (let variant = 0; variant < 2; variant++) {
     const id = `${site}-${slug}-gemini-image-v${env.MEDIA_GENERATION_REVISION || 3}-${slot}-${variant}`;
     const previous = await env.WORKBOARD_DB.prepare(
@@ -481,13 +491,11 @@ export async function generatedPhoto(
       .run();
     if (checked.visual_review?.approved)
       return { ...checked, fresh: !hadReview };
+    reasons.push(String(checked.visual_review?.reason || "주제 적합성 확인 실패").slice(0,600));
     if (!hadReview && variant === 0)
       throw new PendingMedia(
         "이미지 후보가 반려됐습니다. 저장된 검토 결과를 유지하고 다음 후보를 준비합니다.",
       );
   }
-  throw new HttpError(
-    409,
-    "MEDIA_REVIEW: 이미지 적합성 검토를 통과하지 못했습니다. 최대 2개 후보를 검사했으며 원본 등록이 필요합니다.",
-  );
+  throw new ImageCandidatesRejected(slot,reasons);
 }

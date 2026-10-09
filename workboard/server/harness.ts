@@ -1,3 +1,4 @@
+import {planMediaRecovery} from "./media-recovery";
 import {applyModelSettings} from "./model-settings";
 import { importLicensedMedia } from "./media-import";
 import type { Env } from "./env";
@@ -457,7 +458,7 @@ export async function advanceHarness(env: Env) {
   env = await applyModelSettings(env);
   const payload = JSON.parse(task.payload_json),
     w = await workspace(env, task.site_id);
-  env = {...env, MEDIA_GENERATION_REVISION: payload.photo_retry_revision || 3};
+  env = {...env, MEDIA_GENERATION_REVISION: payload.photo_retry_revision || 3, MEDIA_RECOVERY_REASONS:payload.media_recovery?.reasons || []};
   await env.WORKBOARD_DB.prepare(
     "UPDATE content_jobs SET status=?,error=NULL,updated_at=? WHERE id=?",
   )
@@ -533,6 +534,7 @@ export async function advanceHarness(env: Env) {
           payload.slug,
           payload.input.translations,
         );
+      if(payload.media_recovery)payload.media_recovery={...payload.media_recovery,state:"complete",finished_at:new Date().toISOString()};
       payload.input.featured_image_url =
         payload.input.translations[w.languages[0]].images?.[0]?.url;
     }
@@ -766,6 +768,13 @@ export async function advanceHarness(env: Env) {
       next: next || null,
     };
   } catch (e) {
+    if(task.stage === "photo_editor" && planMediaRecovery(payload,e)){
+      const notice="이미지 반려 이유를 반영해 구도를 단순화합니다. 승인된 이미지는 유지하고 새 후보를 한 차례 자동 검사합니다.";
+      await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET status='pending',error=NULL,payload_json=?,lease_until=NULL,updated_at=? WHERE job_id=?").bind(JSON.stringify(payload),new Date().toISOString(),task.job_id).run();
+      await env.WORKBOARD_DB.prepare("UPDATE agent_steps SET status='waiting',error=?,finished_at=? WHERE id=?").bind(notice,new Date().toISOString(),step).run();
+      await saveProgress(env,task.job_id,payload,"agent_pending");
+      return {worked:true,job_id:task.job_id,agent:task.stage,recovering:true};
+    }
     if (e instanceof ProviderWait) {
       const retryKey =
         task.stage +
@@ -840,11 +849,14 @@ export async function advanceHarness(env: Env) {
         recovering: true,
       };
     }
+    if(task.stage === "photo_editor" && e instanceof ProviderWait)e=new HttpError(409,"MEDIA_REVIEW: 이미지 API의 일시 오류가 반복되어 연결 복구 또는 원본 등록을 기다립니다.");
+    if(task.stage === "photo_editor" && e instanceof HttpError && !(e instanceof BudgetWait) && !e.message.includes("MEDIA_REVIEW"))e=new HttpError(e.status,"MEDIA_REVIEW: "+e.message+" 저장된 글을 유지하고 이미지 자료 또는 연결 복구를 기다립니다.");
     if (
       task.stage === "photo_editor" &&
       e instanceof HttpError &&
       e.message.includes("MEDIA_REVIEW")
     ) {
+      payload.media_recovery={...(payload.media_recovery || {}),state:"needs_resource",reason:e.message,at:new Date().toISOString()};
       const error =
         "이미지 확보 대기: " +
         e.message.replace("MEDIA_REVIEW: ", "") +

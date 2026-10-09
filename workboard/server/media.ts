@@ -211,7 +211,11 @@ export async function illustrate(
   const count = Math.max(2, Math.min(4, w.strategy.required_images));
   const candidates = await stockPhotos(env, query, 0, w.site_id);
   const photos: StockPhoto[] = [];
+  const prefix=`${w.site_id}-${slug}-gemini-image-v`;
+  const saved=await env.WORKBOARD_DB.prepare("SELECT result_json FROM creative_requests WHERE site_id=? AND kind='image' AND status='complete' AND substr(id,1,length(?))=? AND json_extract(result_json,'$.visual_review.approved')=1 AND json_extract(result_json,'$.visual_review.policy')=? ORDER BY created_at").bind(w.site_id,prefix,prefix,VISUAL_POLICY).all<{result_json:string}>();
+  for(const row of saved.results){const photo:StockPhoto=JSON.parse(row.result_json);if(koreanMedia(photo.alt)&&!photos.some(p=>p.url===photo.url)&&photos.length<count)photos.push(photo);}
   for (const candidate of candidates) {
+    if(photos.length>=count)break;
     const checked = await reviewPhoto(
       env,
       w.site_id,
