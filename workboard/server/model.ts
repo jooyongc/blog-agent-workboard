@@ -66,6 +66,31 @@ export class IncompleteResponse extends HttpError {
   constructor(public reason: string) {
     super(502, "AI 답변이 완결되지 않았습니다. 출력 복구가 필요합니다.");
   }
+  /** Truncation or an empty turn can be recovered with a larger output budget; safety blocks cannot. */
+  get recoverable() {
+    return /^(max_tokens|MAX_TOKENS|pause_turn|EMPTY|OTHER)$/.test(this.reason);
+  }
+}
+/** The provider answered and billed, but the body was not the JSON the role promised. */
+export class MalformedResponse extends HttpError {
+  constructor(public detail = "") {
+    super(502, "AI 응답 형식을 확인하지 못했습니다.");
+  }
+}
+/** No answer was received, so the charge is unknown and the request must not be repeated automatically. */
+export class UnsettledResponse extends HttpError {
+  constructor(public detail = "") {
+    super(
+      502,
+      "AI 응답을 받지 못했습니다 (시간 초과 또는 연결 오류). 비용이 확인되지 않아 자동 재시도하지 않았습니다.",
+    );
+  }
+}
+/** Output ceiling for the single automatic recovery of a role: twice the normal ceiling, at most 16k, never lower. */
+export function boostedTokens(maxTokens: number, level: unknown) {
+  return Number(level) >= 1
+    ? Math.max(maxTokens, Math.min(16000, maxTokens * 2))
+    : maxTokens;
 }
 export class BudgetWait extends HttpError {
   constructor(
@@ -110,6 +135,8 @@ export async function modelJson(
   const apiKey = gemini ? env.GEMINI_API_KEY : env.ANTHROPIC_API_KEY;
   if (env.AI_ENABLED !== "true" || !apiKey)
     throw new HttpError(503, "AI 연결이 준비되지 않았습니다.");
+  // A bounded automatic recovery of a truncated answer repeats the role with a larger output ceiling.
+  maxTokens = boostedTokens(maxTokens, env.AI_OUTPUT_BOOST);
   const id = crypto.randomUUID(),
     now = Date.now(),
     month = new Date(now + 9 * 3600000).toISOString().slice(0, 7),
@@ -300,8 +327,10 @@ export async function modelJson(
     )
       .bind(settled ? cost : null, settled ? 1 : 0, cost, id)
       .run();
-    throw e instanceof HttpError
-      ? e
-      : new HttpError(502, "AI 응답 형식을 확인하지 못했습니다.");
+    if (e instanceof HttpError) throw e;
+    // Timeouts keep actual=NULL, so the unknown charge stays gated for reconciliation.
+    throw settled
+      ? new MalformedResponse(String(e).slice(0, 160))
+      : new UnsettledResponse(String(e).slice(0, 160));
   }
 }

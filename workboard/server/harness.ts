@@ -16,6 +16,8 @@ import { HttpError } from "./http";
 import {
   BudgetWait,
   IncompleteResponse,
+  MalformedResponse,
+  UnsettledResponse,
   ProviderWait,
   workerModel,
   reviewModel,
@@ -29,6 +31,7 @@ import {
   articleFingerprint,
   MAX_SUPERVISOR_ROUNDS,
   planFinalCorrection,
+  convertExhaustedResearch,
   SUPERVISOR_MODEL,
 } from "./supervisor";
 import { creativeAsset, fireflyReady, PendingMedia } from "./firefly";
@@ -101,6 +104,128 @@ export function planRepair(payload: any, w: { languages: string[] }) {
   };
   return true;
 }
+/**
+ * Every stop is classified once, at the moment it happens, and the class is
+ * persisted with the checkpoint. Recovery decides from the class, never from a
+ * substring of a human-readable message.
+ */
+export type FailureKind =
+  | "incomplete"
+  | "malformed"
+  | "transient"
+  | "evidence"
+  | "review"
+  | "provider"
+  | "unknown"
+  | "media"
+  | "connection"
+  | "other";
+export const AUTO_RETRY_LIMIT = 1;
+export const LEASE_MINUTES = 12;
+const stageStatus: Record<string, string> = {
+  researcher: "researching",
+  writer: "generating",
+  photo_editor: "agent_pending",
+  verifier: "verifying",
+  supervisor: "supervising",
+  editor: "editing",
+  publisher: "publishing",
+};
+export function classifyFailure(e: unknown, stage: string): FailureKind {
+  if (e instanceof IncompleteResponse)
+    return e.recoverable ? "incomplete" : "provider";
+  if (e instanceof MalformedResponse) return "malformed";
+  if (e instanceof UnsettledResponse) return "unknown";
+  if (e instanceof ProviderWait) return "transient";
+  return classifyMessage(e instanceof Error ? e.message : "", stage);
+}
+/** Fallback for checkpoints written before the class was persisted. */
+export function classifyMessage(message: string, stage: string): FailureKind {
+  if (/AI 답변이 완결되지 않았습니다/.test(message)) return "incomplete";
+  if (/AI 응답 형식을 확인하지 못했습니다|글 형식을 확인하지 못했습니다|판단 형식을 확인하지 못했습니다|검증 형식이 올바르지|지시 내용이 없습니다/.test(message))
+    return "malformed";
+  if (/AI 응답을 받지 못했습니다/.test(message)) return "unknown";
+  if (/일시적으로 요청을 제한/.test(message)) return "transient";
+  if (
+    stage === "researcher" &&
+    /독립적인 출처|출처 근거를 확인|핵심 용어/.test(message)
+  )
+    return "evidence";
+  if (/^상위 검토/.test(message)) return "review";
+  if (/AI 요청이 거절|AI 요청을 처리하지|credit balance/i.test(message))
+    return "provider";
+  if (/MEDIA_REVIEW|이미지/.test(message)) return "media";
+  if (/사이트 연결 인증|연결 변수|OAuth/.test(message)) return "connection";
+  return "other";
+}
+/**
+ * Bounded, visible automatic retry. At most AUTO_RETRY_LIMIT repeat per role
+ * and review round, only for an unfinished or malformed answer or a research
+ * pass that found too few sources, and only when the previous charge is known.
+ * The repeat runs with a larger output ceiling, so a truncated answer is not
+ * simply reproduced. Media and delivery keep their own receipts and are never
+ * repeated here. Returns the attempt number or 0.
+ */
+export function planAutoRetry(
+  payload: any,
+  stage: string,
+  kind: FailureKind,
+  settled: boolean,
+) {
+  if (!["incomplete", "malformed", "evidence"].includes(kind)) return 0;
+  if (!settled || ["publisher", "photo_editor"].includes(stage)) return 0;
+  const key = `${stage}/${payload.supervisor_rounds || 0}`;
+  payload.retries ||= {};
+  const used = Number(payload.retries[key]) || 0;
+  if (used >= AUTO_RETRY_LIMIT) return 0;
+  payload.retries[key] = used + 1;
+  return used + 1;
+}
+function retryNotice(kind: FailureKind, attempt: number) {
+  return `${
+    kind === "evidence"
+      ? "확인된 출처가 부족해 검색을 한 번 더 실행합니다."
+      : kind === "incomplete"
+        ? "답변이 중간에 끊겨 출력 한도를 늘려 한 번 더 실행합니다."
+        : "응답 형식이 맞지 않아 출력 한도를 늘려 한 번 더 실행합니다."
+  } (자동 복구 ${attempt}/${AUTO_RETRY_LIMIT})`;
+}
+/** Output ceiling level for the current role: the number of automatic repeats already used. */
+export function outputBoost(payload: any, stage: string) {
+  return Number(payload.retries?.[`${stage}/${payload.supervisor_rounds || 0}`]) || 0;
+}
+/**
+ * True only when every model run made for this article since the role started
+ * has a known charge. A newer settled run (for example an operator recheck)
+ * cannot hide an earlier unknown one.
+ */
+async function chargeSettled(
+  env: Env,
+  siteId: string,
+  slug: string | undefined,
+  since: string | null,
+) {
+  if (!slug) return true;
+  const open = await env.WORKBOARD_DB.prepare(
+    "SELECT COUNT(*) AS n FROM ai_runs WHERE article_key=? AND created_at>=? AND (actual IS NULL OR status IN ('running','interrupted'))",
+  )
+    .bind(`${siteId}/${slug}`, since ?? "")
+    .first<{ n: number }>();
+  return !open?.n;
+}
+async function roleStarted(env: Env, jobId: string, stage: string) {
+  const row = await env.WORKBOARD_DB.prepare(
+    "SELECT started_at FROM agent_steps WHERE job_id=? AND agent=? ORDER BY started_at DESC LIMIT 1",
+  )
+    .bind(jobId, stage)
+    .first<{ started_at: string }>();
+  return row?.started_at ?? null;
+}
+const LEGACY_RETRY_FLAGS: Partial<Record<FailureKind, string[]>> = {
+  incomplete: ["response_retries"],
+  malformed: ["format_retries"],
+  evidence: ["grounding_recovery_v3", "flash36_transition", "flash31_transition"],
+};
 function wipResearchValid(notes: Record<string, string> | undefined) {
   return (
     !!notes &&
@@ -114,7 +239,7 @@ function wipResearchValid(notes: Record<string, string> | undefined) {
 }
 export async function recoverWorkflows(env: Env, now = Date.now()) {
   const tasks = await env.WORKBOARD_DB.prepare(
-    "SELECT job_id,site_id,stage,status,error,payload_json FROM agent_workflows WHERE status IN ('failed','budget_wait','retry_wait') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted')) ORDER BY updated_at LIMIT 100",
+    "SELECT job_id,site_id,stage,status,error,payload_json FROM agent_workflows WHERE status IN ('failed','budget_wait','retry_wait') AND site_id NOT IN (SELECT site_id FROM workspace_records WHERE json_extract(config_json,'$.schedule.owner')='aside') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted')) ORDER BY updated_at LIMIT 100",
   ).all<{
     job_id: string;
     site_id: string;
@@ -160,42 +285,56 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
       task.error?.includes("실제 언어 오류")
     )
       resume = true;
-    if (
-      task.status === "failed" &&
-      ["researcher", "supervisor", "editor"].includes(stage) &&
-      task.error?.includes("AI 답변이 완결") &&
-      !(payload.response_retries >= 1)
-    ) {
-      payload.response_retries = (payload.response_retries || 0) + 1;
-      resume = true;
-    }
-    if (
-      task.status === "failed" &&
-      ["supervisor", "editor"].includes(stage) &&
-      task.error?.includes("AI 응답 형식을 확인하지") &&
-      !(payload.format_retries >= 1)
-    ) {
-      const run = await env.WORKBOARD_DB.prepare(
-        "SELECT actual,status FROM ai_runs WHERE article_key=? ORDER BY created_at DESC LIMIT 1",
+    if (task.status === "failed" && !resume) {
+      // One policy for every role: the persisted class decides, a bounded counter limits it,
+      // and an unknown charge (no settled ai_run) keeps the reconciliation gate.
+      const failure =
+        payload.last_failure?.stage === task.stage ? payload.last_failure : null;
+      const kind: FailureKind =
+        failure?.kind ?? classifyMessage(task.error || "", task.stage);
+      // Checkpoints from before this policy keep the retries they already spent.
+      const spent =
+        !failure &&
+        (LEGACY_RETRY_FLAGS[kind] || []).some((flag) => payload[flag]);
+      // An operator who edited the stopped draft owns it now; never overwrite that edit.
+      const job = await env.WORKBOARD_DB.prepare(
+        "SELECT request_json FROM content_jobs WHERE id=?",
       )
-        .bind(`${task.site_id}/${payload.slug}`)
-        .first<{ actual: number | null; status: string }>();
-      // A fully received, billed malformed response is safe to repeat once.
-      // Unknown delivery/timeouts retain their reconciliation gate.
-      if (run?.status === "failed" && run.actual !== null) {
-        payload.format_retries = (payload.format_retries || 0) + 1;
+        .bind(task.job_id)
+        .first<{ request_json: string }>();
+      const edited =
+        !!payload.input && job?.request_json !== JSON.stringify(payload.input);
+      if (
+        !spent &&
+        !edited &&
+        ["incomplete", "malformed", "evidence"].includes(kind) &&
+        planAutoRetry(
+          payload,
+          task.stage,
+          kind,
+          await chargeSettled(
+            env,
+            task.site_id,
+            payload.slug,
+            await roleStarted(env, task.job_id, task.stage),
+          ),
+        )
+      ) {
         resume = true;
+        const at = new Date(now).toISOString();
+        await env.WORKBOARD_DB.prepare(
+          "INSERT INTO agent_steps(id,job_id,agent,status,error,started_at,finished_at) VALUES(?,?,?,'waiting',?,?,?)",
+        )
+          .bind(
+            crypto.randomUUID(),
+            task.job_id,
+            task.stage,
+            retryNotice(kind, 1),
+            at,
+            at,
+          )
+          .run();
       }
-    }
-    if (
-      task.status === "failed" &&
-      stage === "researcher" &&
-      env.AI_PROVIDER === "gemini" &&
-      task.error?.includes("독립적인 출처") &&
-      !payload.grounding_recovery_v3
-    ) {
-      payload.grounding_recovery_v3 = true;
-      resume = true;
     }
     if (task.status === "retry_wait")
       resume = Date.parse(payload.provider_retry_at) <= now;
@@ -230,48 +369,6 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
     ) {
       payload.gemini_transition = true;
       resume = true;
-    }
-    if (
-      task.status === "failed" &&
-      stage === "researcher" &&
-      env.AI_PROVIDER === "gemini" &&
-      !payload.flash36_transition &&
-      (task.error?.includes("출처") || task.error?.includes("AI 답변이 완결"))
-    ) {
-      const run = await env.WORKBOARD_DB.prepare(
-        "SELECT actual,status FROM ai_runs WHERE article_key=? ORDER BY created_at DESC LIMIT 1",
-      )
-        .bind(`${task.site_id}/${payload.slug}`)
-        .first<{ actual: number | null; status: string }>();
-      if (
-        run &&
-        run.actual !== null &&
-        ["failed", "complete"].includes(run.status)
-      ) {
-        payload.flash36_transition = true;
-        resume = true;
-      }
-    }
-    if (
-      task.status === "failed" &&
-      stage === "researcher" &&
-      env.AI_PROVIDER === "gemini" &&
-      !payload.flash31_transition &&
-      (task.error?.includes("출처") || task.error?.includes("AI 답변이 완결"))
-    ) {
-      const run = await env.WORKBOARD_DB.prepare(
-        "SELECT actual,status FROM ai_runs WHERE article_key=? ORDER BY created_at DESC LIMIT 1",
-      )
-        .bind(`${task.site_id}/${payload.slug}`)
-        .first<{ actual: number | null; status: string }>();
-      if (
-        run &&
-        run.actual !== null &&
-        ["failed", "complete"].includes(run.status)
-      ) {
-        payload.flash31_transition = true;
-        resume = true;
-      }
     }
     if (
       task.status === "failed" &&
@@ -316,6 +413,7 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
     }
     if (!resume) continue;
     delete payload.recovery;
+    if (payload.last_failure?.stage === task.stage) delete payload.last_failure;
     const changed = await env.WORKBOARD_DB.prepare(
       "UPDATE agent_workflows SET stage=?,status='pending',error=NULL,payload_json=?,updated_at=? WHERE job_id=? AND status=?",
     )
@@ -378,9 +476,62 @@ export async function enqueueApproved(env: Env) {
       .run();
   }
 }
+/**
+ * A lease that expired means the request executing that role died. The role
+ * result is unknown, so the checkpoint, its step row and any still-running
+ * cost reservation are all marked interrupted (the reservation stays counted).
+ */
+export async function expireLeases(env: Env, now = Date.now()) {
+  const iso = new Date(now).toISOString();
+  const expired = await env.WORKBOARD_DB.prepare(
+    "SELECT job_id,site_id,stage,payload_json,lease_until FROM agent_workflows WHERE status='running' AND lease_until<?",
+  )
+    .bind(iso)
+    .all<{ job_id: string; site_id: string; stage: string; payload_json: string; lease_until: string }>();
+  for (const row of expired.results) {
+    const changed = await env.WORKBOARD_DB.prepare(
+      "UPDATE agent_workflows SET status='interrupted',error='중단된 단계의 결과 확인이 필요합니다.',lease_until=NULL,updated_at=? WHERE job_id=? AND status='running' AND lease_until<?",
+    )
+      .bind(iso, row.job_id, iso)
+      .run();
+    if (!changed.meta.changes) continue;
+    await env.WORKBOARD_DB.prepare(
+      "UPDATE agent_steps SET status='interrupted',error='실행 리스가 만료되어 결과를 받지 못했습니다.',finished_at=? WHERE job_id=? AND status='running' AND started_at<?",
+    )
+      .bind(iso, row.job_id, row.lease_until)
+      .run();
+    const slug = JSON.parse(row.payload_json || "{}").slug;
+    if (slug)
+      await env.WORKBOARD_DB.prepare(
+        "UPDATE ai_runs SET status='interrupted' WHERE article_key=? AND status='running' AND created_at<?",
+      )
+        .bind(`${row.site_id}/${slug}`, row.lease_until)
+        .run();
+    await env.WORKBOARD_DB.prepare(
+      "UPDATE content_jobs SET status=?,error=?,updated_at=? WHERE id=? AND status NOT IN ('cancelled','published','drafted') AND EXISTS(SELECT 1 FROM agent_workflows f WHERE f.job_id=content_jobs.id AND f.status='interrupted')",
+    )
+      .bind(
+        row.stage === "publisher" ? "needs_reconcile" : "review",
+        row.stage === "publisher"
+          ? "임시 발행 단계가 중단되었습니다. 원격 초안 존재 여부를 확인한 뒤 재개하세요."
+          : "에이전트 단계 실행이 중단되었습니다. 저장된 결과를 확인한 뒤 '중단 단계부터 재개'를 누르세요.",
+        iso,
+        row.job_id,
+      )
+      .run();
+  }
+  // Step rows whose workflow already moved on must not stay "running" forever.
+  await env.WORKBOARD_DB.prepare(
+    "UPDATE agent_steps SET status='interrupted',error='실행 결과를 받지 못한 단계입니다.',finished_at=? WHERE status='running' AND started_at<? AND job_id NOT IN (SELECT job_id FROM agent_workflows WHERE status='running')",
+  )
+    .bind(iso, new Date(now - LEASE_MINUTES * 60000).toISOString())
+    .run();
+  return expired.results.length;
+}
 export async function advanceHarness(env: Env) {
   if (await importLicensedMedia(env))
     return { worked: true, agent: "licensed_media_import" };
+  await expireLeases(env);
   await recoverWorkflows(env);
   const reconnect = await env.WORKBOARD_DB.prepare(
     "SELECT job_id,site_id,stage,error,payload_json FROM agent_workflows WHERE status IN ('failed','media_wait') AND stage IN ('photo_editor','publisher') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted'))",
@@ -408,12 +559,6 @@ export async function advanceHarness(env: Env) {
         .run();
   }
   await enqueueApproved(env);
-  // A lost lease needs reconciliation; do not silently repeat paid calls or delivery.
-  await env.WORKBOARD_DB.prepare(
-    "UPDATE agent_workflows SET status='interrupted',error='중단된 단계의 결과 확인이 필요합니다.' WHERE status='running' AND lease_until<?",
-  )
-    .bind(new Date().toISOString())
-    .run();
   if (env.MEDIA_POLICY === "adobe-generated" && generatedImagesReady(env)) {
     const outdated = await env.WORKBOARD_DB.prepare(
       "SELECT job_id,payload_json FROM agent_workflows WHERE status='pending' AND stage IN ('verifier','supervisor','publisher')",
@@ -451,7 +596,7 @@ export async function advanceHarness(env: Env) {
   const claim = await env.WORKBOARD_DB.prepare(
     "UPDATE agent_workflows SET status='running',lease_until=?,updated_at=? WHERE job_id=? AND status='pending'",
   )
-    .bind(new Date(Date.now() + 12 * 60000).toISOString(), now, task.job_id)
+    .bind(new Date(Date.now() + LEASE_MINUTES * 60000).toISOString(), now, task.job_id)
     .run();
   if (!claim.meta.changes) return { worked: false };
   await env.WORKBOARD_DB.prepare(
@@ -462,22 +607,12 @@ export async function advanceHarness(env: Env) {
   env = await applyModelSettings(env);
   const payload = JSON.parse(task.payload_json),
     w = await workspace(env, task.site_id);
-  env = {...env, MEDIA_GENERATION_REVISION: payload.photo_retry_revision || 3, MEDIA_RECOVERY_REASONS:payload.media_recovery?.reasons || []};
+  env = {...env, MEDIA_GENERATION_REVISION: payload.photo_retry_revision || 3, MEDIA_RECOVERY_REASONS:payload.media_recovery?.reasons || [], AI_OUTPUT_BOOST: outputBoost(payload, task.stage)};
   await env.WORKBOARD_DB.prepare(
     "UPDATE content_jobs SET status=?,error=NULL,updated_at=? WHERE id=?",
   )
     .bind(
-      (
-        {
-          researcher: "researching",
-          writer: "generating",
-          photo_editor: "agent_pending",
-          verifier: "verifying",
-          supervisor: "supervising",
-          editor: "editing",
-          publisher: "publishing",
-        } as Record<string, string>
-      )[task.stage] || "agent_pending",
+      stageStatus[task.stage] || "agent_pending",
       new Date().toISOString(),
       task.job_id,
     )
@@ -627,7 +762,11 @@ export async function advanceHarness(env: Env) {
           payload.research.briefs[lang],
           lang,
         );
-      const decision = await supervise(env, w, payload);
+      const decision = convertExhaustedResearch(
+        await supervise(env, w, payload),
+        payload,
+        w,
+      );
       payload.supervisor_rounds = decision.round;
       payload.supervision = [...(payload.supervision || []), decision];
       if (decision.action === "approve") {
@@ -826,29 +965,27 @@ export async function advanceHarness(env: Env) {
         };
       }
     }
-    if (
-      e instanceof IncompleteResponse &&
-      ["researcher", "supervisor", "editor"].includes(task.stage) &&
-      !(payload.response_retries >= 1)
-    ) {
-      payload.response_retries = (payload.response_retries || 0) + 1;
+    const kind = classifyFailure(e, task.stage);
+    const attempt = planAutoRetry(
+      payload,
+      task.stage,
+      kind,
+      await chargeSettled(env, w.site_id, payload.slug, now),
+    );
+    if (attempt) {
+      const notice = retryNotice(kind, attempt);
       await env.WORKBOARD_DB.prepare(
         "UPDATE agent_workflows SET status='pending',payload_json=?,error=NULL,lease_until=NULL,updated_at=? WHERE job_id=?",
       )
         .bind(JSON.stringify(payload), new Date().toISOString(), task.job_id)
         .run();
       await env.WORKBOARD_DB.prepare(
-        "UPDATE agent_steps SET status='waiting',error='응답 미완결: 한 번 자동 복구합니다.',finished_at=? WHERE id=?",
+        "UPDATE agent_steps SET status='waiting',error=?,finished_at=? WHERE id=?",
       )
-        .bind(new Date().toISOString(), step)
+        .bind(notice, new Date().toISOString(), step)
         .run();
       if (payload.input)
-        await saveProgress(
-          env,
-          task.job_id,
-          payload,
-          task.stage === "supervisor" ? "supervising" : "editing",
-        );
+        await saveProgress(env, task.job_id, payload, stageStatus[task.stage] || "agent_pending");
       return {
         worked: true,
         job_id: task.job_id,
@@ -955,6 +1092,8 @@ export async function advanceHarness(env: Env) {
       };
     }
     const error = e instanceof Error ? e.message : "에이전트 실행 실패";
+    // The class travels with the checkpoint so recovery never re-parses the message.
+    payload.last_failure = { stage: task.stage, kind, at: new Date().toISOString() };
     await env.WORKBOARD_DB.prepare(
       "UPDATE agent_workflows SET status='failed',payload_json=?,error=?,lease_until=NULL,updated_at=? WHERE job_id=?",
     )

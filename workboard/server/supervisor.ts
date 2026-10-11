@@ -38,7 +38,66 @@ export type Supervision = {
   run_id: string;
   round: number;
   at: string;
+  converted_from?: "research";
 };
+/**
+ * The workflow allows exactly one supervisor-ordered research pass, and none in
+ * the last ordinary round. A request beyond that used to stop the job for a
+ * human; instead the senior decision becomes
+ * a deletion assignment: every claim the supervisor could not verify is removed,
+ * nothing new is invented, and the ordinary review rounds continue.
+ */
+export function convertExhaustedResearch(
+  decision: Supervision,
+  payload: any,
+  w: Workspace,
+): Supervision {
+  if (
+    decision.action !== "research" ||
+    !(
+      payload.supervisor_researches >= 1 ||
+      decision.round >= MAX_SUPERVISOR_ROUNDS
+    )
+  )
+    return decision;
+  const unsupported = decision.claims
+    .filter((c) => c.status !== "verified")
+    .map((c) => ({ lang: c.lang, claim: c.claim, source_url: c.source_url }));
+  // Without named claims there is nothing safe to delete; keep the stop for a person.
+  if (!unsupported.length) return decision;
+  const repeated = payload.supervisor_researches >= 1;
+  const structureIssues = Object.fromEntries(
+    w.languages.map((lang) => [
+      lang,
+      quality(payload.input.translations[lang], w, lang).issues,
+    ]),
+  );
+  return {
+    ...decision,
+    action: "edit",
+    converted_from: "research",
+    reason: (
+      decision.reason +
+      (repeated
+        ? " 추가 조사는 이미 한 차례 사용했으므로 근거 없는 주장을 삭제하는 보완으로 전환합니다."
+        : " 마지막 검토 라운드라 추가 조사 대신 근거 없는 주장을 삭제하는 보완으로 전환합니다.")
+    ).slice(0, 2000),
+    instructions: (
+      (repeated
+        ? "Automatic research was already repeated once for this topic and no further sources can be gathered."
+        : "This is the last review round, so no further research can be gathered.") +
+      " Do not add new facts, numbers or URLs. Remove every unsupported or contradicted claim listed here from every section, introduction, table and FAQ, and keep only statements backed by the exact supplied evidence: " +
+      JSON.stringify(unsupported) +
+      ". If a section loses all of its facts, shorten it to the supported general guidance or remove it. Preserve licensed reviewed images and unaffected prose, keep the structural checks and at least two distinct exact research URLs as visible links. Original supervisor request: " +
+      decision.instructions.slice(0, 1500) +
+      "\nMandatory server checks: " +
+      JSON.stringify({ structureIssues, unsupported })
+    ).slice(0, 6000),
+    target_languages: decision.target_languages?.length
+      ? decision.target_languages
+      : w.languages,
+  };
+}
 const normalize = (s: string) =>
   s.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 export async function articleFingerprint(input: DraftInput) {

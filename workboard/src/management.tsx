@@ -1382,7 +1382,9 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                           ? "완료"
                           : step?.status === "failed"
                             ? "재검토"
-                            : "대기";
+                            : step?.status === "interrupted"
+                              ? "중단"
+                              : "대기";
                       return (
                         <div
                           key={agent}
@@ -1484,6 +1486,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                                   complete: "완료",
                                   failed: "중단",
                                   waiting: "대기",
+                                  interrupted: "중단 · 결과 확인 필요",
                                 } as Record<string, string>
                               )[step.status] || step.status}
                             </span>

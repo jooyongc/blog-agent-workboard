@@ -1,3 +1,6 @@
+import {expireLeases,classifyMessage,planAutoRetry,AUTO_RETRY_LIMIT} from "../server/harness";
+import {boostedTokens} from "../server/model";
+import {convertExhaustedResearch} from "../server/supervisor";
 import {planFinalCorrection} from "../server/supervisor";
 import {ImageCandidatesRejected,planMediaRecovery,recoveryScene} from "../server/media-recovery";
 import {ProviderWait} from "../server/model";
@@ -1856,4 +1859,167 @@ test("exhausted ordinary edit workflow is recovered only once at its existing se
  d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,error,created_at,updated_at) VALUES('senior-final','final-topic',?,'supervisor','failed',?,'자동 보완 한도에 도달했습니다.','now','now')").run(w.site_id,JSON.stringify(payload));
  await recoverWorkflows(env);let row=d.sqlite.prepare("SELECT stage,status,payload_json FROM agent_workflows").get() as any;assert.equal(row.stage,"editor");assert.equal(row.status,"pending");assert.equal(JSON.parse(row.payload_json).supervisor_rounds,3);assert.equal(JSON.parse(row.payload_json).final_repair_attempted,true);
  d.sqlite.prepare("UPDATE agent_workflows SET stage='supervisor',status='failed'").run();await recoverWorkflows(env);row=d.sqlite.prepare("SELECT status FROM agent_workflows").get() as any;assert.equal(row.status,"failed");
+});
+
+function stalledJob(d:any,id:string,stage:string,status:string,payload:any,site="koreadecode",error:string|null=null){
+ d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES(?,?,?,?,'Travel','{}','review','now','now')").run(id,site,payload.slug,payload.title||"Stalled");
+ d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'now','now')").run(id,"topic-"+id,site,stage,status,JSON.stringify(payload),error);
+}
+function anthropic(data:unknown,stop="end_turn"){return Response.json({stop_reason:stop,usage:{input_tokens:100,output_tokens:100},content:stop==="end_turn"?[{type:"text",text:JSON.stringify(data)}]:[]});}
+
+test("each role gets its own bounded recovery and the repeat uses a larger output ceiling",async()=>{
+ const {env,d}=environment();env.ANTHROPIC_API_KEY="test";
+ const {input,research,decision}=supervisorFixture();
+ stalledJob(d,"per-role",  "supervisor","pending",{title:input.translations.en.title,slug:input.slug,input,research});
+ const original=globalThis.fetch;const seen:{role:string,max:number}[]=[];let supervisor=0,editor=0;
+ globalThis.fetch=async(_url,init)=>{
+  const body=JSON.parse(String(init?.body));
+  if(body.system.includes("senior editorial supervisor")){seen.push({role:"supervisor",max:body.max_tokens});return ++supervisor===1?anthropic(null,"max_tokens"):anthropic({...decision,action:"edit",instructions:"Remove the unsupported claim."});}
+  if(body.system.includes("senior correction editor")){seen.push({role:"editor",max:body.max_tokens});return ++editor===1?anthropic(null,"max_tokens"):anthropic(input.translations.en);}
+  throw Error("unexpected call");
+ };
+ try{
+  for(let i=0;i<4;i++)await advanceHarness(env);
+  const state=d.sqlite.prepare("SELECT stage,status,payload_json FROM agent_workflows WHERE job_id='per-role'").get() as any;
+  // Before: one shared counter let the supervisor consume the only retry, so the truncated editor stopped the job.
+  assert.equal(state.stage,"photo_editor");assert.equal(state.status,"pending");
+  assert.deepEqual(seen,[{role:"supervisor",max:12000},{role:"supervisor",max:16000},{role:"editor",max:7000},{role:"editor",max:14000}]);
+  assert.deepEqual(JSON.parse(state.payload_json).retries,{"supervisor/0":1,"editor/1":1});
+  const waits=d.sqlite.prepare("SELECT agent,error FROM agent_steps WHERE status='waiting' ORDER BY started_at").all() as any[];
+  assert.equal(waits.length,2);assert.ok(waits.every(w=>w.error.includes(`자동 복구 1/${AUTO_RETRY_LIMIT}`)));
+ }finally{globalThis.fetch=original;}
+});
+
+test("a malformed preliminary verifier answer is recovered once instead of stopping the job",async()=>{
+ const {env,d}=environment();env.ANTHROPIC_API_KEY="test";
+ const {input,research,decision}=supervisorFixture();
+ stalledJob(d,"verifier-format","verifier","pending",{title:input.translations.en.title,slug:input.slug,input,research});
+ const original=globalThis.fetch;let calls=0;
+ globalThis.fetch=async()=>++calls===1?Response.json({stop_reason:"end_turn",usage:{input_tokens:100,output_tokens:100},content:[{type:"text",text:"not json at all"}]}):anthropic({passed:true,reason:"ok",claims:decision.claims});
+ try{
+  await advanceHarness(env);
+  assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows").get() as any).status,"pending");
+  await advanceHarness(env);
+  const state=d.sqlite.prepare("SELECT stage,status FROM agent_workflows").get() as any;
+  assert.equal(state.stage,"supervisor");assert.equal(state.status,"pending");assert.equal(calls,2);
+ }finally{globalThis.fetch=original;}
+});
+
+test("a repeated senior research request becomes a deletion assignment instead of a stop",async()=>{
+ const {env,d}=environment();env.ANTHROPIC_API_KEY="test";
+ const {input,research,decision}=supervisorFixture();
+ stalledJob(d,"research-twice","supervisor","pending",{title:input.translations.en.title,slug:input.slug,input,research,supervisor_rounds:1,supervisor_researches:1});
+ const original=globalThis.fetch;let calls=0;
+ globalThis.fetch=async()=>{calls++;return anthropic({...decision,action:"research",instructions:"Find a K-pop glossary source.",claims:[{lang:"en",claim:"Stan means a devoted fan",status:"unsupported"}]});};
+ try{
+  const result=await advanceHarness(env) as any;
+  assert.equal(result.error,undefined);
+  const state=d.sqlite.prepare("SELECT stage,status,payload_json FROM agent_workflows").get() as any;
+  assert.equal(state.stage,"editor");assert.equal(state.status,"pending");
+  const saved=JSON.parse(state.payload_json),last=saved.supervision.at(-1);
+  assert.equal(last.action,"edit");assert.equal(last.converted_from,"research");
+  assert.ok(last.instructions.includes("Stan means a devoted fan"));assert.ok(last.instructions.includes("Do not add new facts"));
+  assert.equal(saved.supervisor_researches,1);assert.equal(calls,1);
+ }finally{globalThis.fetch=original;}
+ const {w}=supervisorFixture();
+ const lastRound={...decision,action:"research",claims:[],round:3,model:"m",run_id:"r",at:"now"} as any;
+ // With no named claim there is nothing safe to delete, so the stop stays for a person.
+ assert.equal(convertExhaustedResearch(lastRound,{input,supervisor_researches:0},w).action,"research");
+ assert.equal(convertExhaustedResearch({...lastRound,round:1},{input,supervisor_researches:0},w).action,"research");
+ const converted=convertExhaustedResearch({...lastRound,claims:[{lang:"en",claim:"Unsupported",status:"unsupported"}]},{input,supervisor_researches:0},w);
+ assert.equal(converted.action,"edit");assert.ok(converted.reason.includes("마지막 검토 라운드"));assert.equal(converted.reason.includes("이미 한 차례"),false);
+});
+
+test("an answer that never arrived keeps its reservation and is not repeated automatically",async()=>{
+ const {env,d}=environment();env.ANTHROPIC_API_KEY="test";
+ const {input,research}=supervisorFixture();
+ stalledJob(d,"timeout","supervisor","pending",{title:input.translations.en.title,slug:input.slug,input,research});
+ const original=globalThis.fetch;let calls=0;
+ globalThis.fetch=async()=>{calls++;throw new DOMException("The operation timed out.","TimeoutError");};
+ try{
+  await advanceHarness(env);await advanceHarness(env);
+  const state=d.sqlite.prepare("SELECT status,payload_json FROM agent_workflows").get() as any;
+  assert.equal(state.status,"failed");assert.equal(calls,1);
+  assert.equal(JSON.parse(state.payload_json).last_failure.kind,"unknown");
+  assert.ok((d.sqlite.prepare("SELECT error FROM agent_workflows").get() as any).error.includes("비용이 확인되지 않아"));
+  const run=d.sqlite.prepare("SELECT actual,reserved FROM ai_runs").get() as any;
+  assert.equal(run.actual,null);assert.ok(run.reserved>0);
+ }finally{globalThis.fetch=original;}
+});
+
+test("an expired lease is closed everywhere and waits for reconciliation instead of a blind replay",async()=>{
+ const {env,d}=environment();
+ const {input,research}=supervisorFixture();
+ stalledJob(d,"lost-lease","editor","running",{slug:input.slug,input,research,supervisor_rounds:1});
+ d.sqlite.prepare("UPDATE agent_workflows SET lease_until='2026-10-01T00:12:00Z'").run();
+ d.sqlite.prepare("INSERT INTO agent_steps(id,job_id,agent,status,started_at) VALUES('lost-step','lost-lease','editor','running','2026-10-01T00:00:00Z')").run();
+ d.sqlite.prepare("INSERT INTO agent_steps(id,job_id,agent,status,started_at) VALUES('orphan-step','other-job','writer','running','2026-10-01T00:00:00Z')").run();
+ d.sqlite.prepare("INSERT INTO ai_runs(id,article_key,month,week,reserved,status,created_at) VALUES('lost-run',?,'2026-10','x',0.2,'running','2026-10-01T00:00:00Z')").run(`koreadecode/${input.slug}`);
+ assert.equal(await expireLeases(env,Date.parse("2026-10-02T00:00:00Z")),1);
+ assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows").get() as any).status,"interrupted");
+ assert.deepEqual((d.sqlite.prepare("SELECT status FROM agent_steps ORDER BY id").all() as any[]).map(r=>r.status),["interrupted","interrupted"]);
+ const run=d.sqlite.prepare("SELECT status,reserved,actual FROM ai_runs").get() as any;
+ assert.equal(run.status,"interrupted");assert.equal(run.reserved,0.2);assert.equal(run.actual,null);
+ assert.equal((d.sqlite.prepare("SELECT status FROM content_jobs").get() as any).status,"review");
+ await recoverWorkflows(env);
+ assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows").get() as any).status,"interrupted");
+});
+
+test("recovery never hides an earlier unknown charge, never overwrites an operator edit and leaves a visible record",async()=>{
+ const make=()=>{const {env,d}=environment();const {input,research}=supervisorFixture();
+  stalledJob(d,"legacy","editor","failed",{slug:input.slug,input,research,supervisor_rounds:1},"koreadecode","AI 응답 형식을 확인하지 못했습니다.");
+  d.sqlite.prepare("UPDATE content_jobs SET request_json=?").run(JSON.stringify(input));
+  d.sqlite.prepare("INSERT INTO agent_steps(id,job_id,agent,status,started_at) VALUES('role','legacy','editor','failed','2026-10-10T00:00:00Z')").run();
+  return {env,d,key:`koreadecode/${input.slug}`};};
+ const status=(d:any)=>(d.sqlite.prepare("SELECT status FROM agent_workflows").get() as any).status;
+ // An unknown run made by the role stays decisive even when a newer recheck settled.
+ let {env,d,key}=make();
+ d.sqlite.prepare("INSERT INTO ai_runs(id,article_key,month,week,reserved,actual,status,created_at) VALUES('unknown',?,'2026-10','x',0.1,NULL,'failed','2026-10-10T00:00:01Z')").run(key);
+ d.sqlite.prepare("INSERT INTO ai_runs(id,article_key,month,week,reserved,actual,status,created_at) VALUES('recheck',?,'2026-10','x',0.01,0.01,'complete','2026-10-10T01:00:00Z')").run(key);
+ await recoverWorkflows(env);assert.equal(status(d),"failed");
+ // A draft the operator edited after the stop is theirs.
+ ({env,d,key}=make());
+ d.sqlite.prepare("INSERT INTO ai_runs(id,article_key,month,week,reserved,actual,status,created_at) VALUES('known',?,'2026-10','x',0.1,0.1,'failed','2026-10-10T00:00:01Z')").run(key);
+ d.sqlite.prepare("UPDATE content_jobs SET request_json='{\"edited\":true}'").run();
+ await recoverWorkflows(env);assert.equal(status(d),"failed");
+ // Legacy checkpoints keep the retry they already spent.
+ ({env,d,key}=make());
+ d.sqlite.prepare("INSERT INTO ai_runs(id,article_key,month,week,reserved,actual,status,created_at) VALUES('known',?,'2026-10','x',0.1,0.1,'failed','2026-10-10T00:00:01Z')").run(key);
+ d.sqlite.prepare("UPDATE agent_workflows SET payload_json=json_set(payload_json,'$.format_retries',1)").run();
+ await recoverWorkflows(env);assert.equal(status(d),"failed");
+ // Otherwise one visible repeat.
+ ({env,d,key}=make());
+ d.sqlite.prepare("INSERT INTO ai_runs(id,article_key,month,week,reserved,actual,status,created_at) VALUES('known',?,'2026-10','x',0.1,0.1,'failed','2026-10-10T00:00:01Z')").run(key);
+ await recoverWorkflows(env);assert.equal(status(d),"pending");
+ assert.ok((d.sqlite.prepare("SELECT error FROM agent_steps WHERE status='waiting'").get() as any).error.includes("자동 복구 1/1"));
+ d.sqlite.prepare("UPDATE agent_workflows SET status='failed'").run();
+ await recoverWorkflows(env);assert.equal(status(d),"failed");
+});
+
+test("Aside-owned workspaces are never resumed by Cloudflare recovery",async()=>{
+ const {env,d}=environment();
+ d.sqlite.prepare("UPDATE workspace_records SET config_json=json_set(config_json,'$.schedule.owner','aside') WHERE site_id='korea-buy-list'").run();
+ stalledJob(d,"aside-job","editor","failed",{slug:"aside-slug"},"korea-buy-list","AI 답변이 완결되지 않았습니다. 출력 복구가 필요합니다.");
+ await recoverWorkflows(env);
+ assert.equal((d.sqlite.prepare("SELECT status FROM agent_workflows").get() as any).status,"failed");
+ assert.equal((d.sqlite.prepare("SELECT status FROM content_jobs").get() as any).status,"review");
+});
+
+test("legacy failure messages map to recovery classes and retries stay bounded per role and round",()=>{
+ assert.equal(classifyMessage("AI 답변이 완결되지 않았습니다. 자동 재시도하지 않았습니다.","supervisor"),"incomplete");
+ assert.equal(classifyMessage("AI 응답 형식을 확인하지 못했습니다.","verifier"),"malformed");
+ assert.equal(classifyMessage("독립적인 출처를 2개 이상 확보하지 못했습니다. 검색 결과 0개","researcher"),"evidence");
+ assert.equal(classifyMessage("상위 검토: 근거 없음. 자동 보완 한도에 도달했습니다.","supervisor"),"review");
+ assert.equal(classifyMessage("원격에 같은 slug가 있거나 조회가 실패했습니다.","publisher"),"other");
+ const payload:any={supervisor_rounds:2};
+ assert.equal(planAutoRetry(payload,"editor","incomplete",true),1);
+ assert.equal(planAutoRetry(payload,"editor","incomplete",true),0);
+ assert.equal(planAutoRetry(payload,"writer","malformed",false),0);
+ assert.equal(planAutoRetry(payload,"publisher","malformed",true),0);
+ assert.equal(planAutoRetry(payload,"photo_editor","incomplete",true),0);
+ assert.equal(planAutoRetry(payload,"supervisor","review",true),0);
+ payload.supervisor_rounds=3;assert.equal(planAutoRetry(payload,"editor","incomplete",true),1);
+ assert.equal(boostedTokens(7000,0),7000);assert.equal(boostedTokens(7000,1),14000);assert.equal(boostedTokens(12000,1),16000);assert.equal(boostedTokens(20000,1),20000);
+ assert.equal(classifyMessage("AI 응답을 받지 못했습니다 (시간 초과 또는 연결 오류). 비용이 확인되지 않아 자동 재시도하지 않았습니다.","editor"),"unknown");
+ assert.equal(planAutoRetry({},"editor","unknown",true),0);
 });
