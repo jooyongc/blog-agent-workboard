@@ -1,4 +1,4 @@
-import {ImageCandidatesRejected,recoveryScene} from "./media-recovery";
+import {ImageCandidatesRejected,recoveryScene,TRANSPORT_TOPIC} from "./media-recovery";
 import type { Env } from "./env";
 import type { StockPhoto } from "./media";
 import { HttpError } from "./http";
@@ -12,6 +12,19 @@ import {
 import { budgetSettings } from "./budget";
 import { PendingMedia } from "./firefly";
 const IMAGE_MODEL = "gemini-3.1-flash-image";
+/**
+ * The image model answered (and billed its prompt) without an image. That is a
+ * known outcome for one candidate, not an unknown one, so the batch continues
+ * with its next candidate instead of stopping the whole photo step.
+ */
+export class NoImageReturned extends HttpError {
+  constructor(public reason: string) {
+    super(409, `MEDIA_REVIEW: Gemini가 이미지를 반환하지 않았습니다 (${reason}).`);
+  }
+}
+function noImageRecord(status: string, error: string | null) {
+  return status === "no_image" || (status === "failed" && /^No image returned/.test(error || ""));
+}
 export const VISUAL_POLICY = "korea-topic-no-text-v2";
 export function generatedImagesReady(env: Env) {
   return (
@@ -253,11 +266,15 @@ async function createImage(
 ): Promise<StockPhoto> {
   const id = `${site}-${slug}-gemini-image-v${env.MEDIA_GENERATION_REVISION || 3}-${slot}-${variant}`;
   const cached = await env.WORKBOARD_DB.prepare(
-    "SELECT status,result_json FROM creative_requests WHERE id=?",
+    "SELECT status,error,result_json FROM creative_requests WHERE id=?",
   )
     .bind(id)
-    .first<{ status: string; result_json: string | null }>();
+    .first<{ status: string; error: string | null; result_json: string | null }>();
   if (cached?.result_json) return JSON.parse(cached.result_json);
+  if (cached && noImageRecord(cached.status, cached.error))
+    throw new NoImageReturned(
+      (cached.error || "").replace(/^No image returned:?\s*/, "").split(" — ")[0] || "EMPTY",
+    );
   if (cached && !["retryable"].includes(cached.status))
     throw new HttpError(
       409,
@@ -271,13 +288,21 @@ async function createImage(
       : "Show a clear side view of a person giving a respectful forward bow, arms at sides, in a South Korean hanbok greeting scene against a plain studio backdrop. No touching or handshake."
     : /kiosk|self.service/i.test(topic)
       ? "Show ordering at a Korean restaurant kiosk. The screen must be blank with only abstract pictorial shapes, absolutely no letters or numbers. Include Korean banchan and metal utensils for context."
+      : TRANSPORT_TOPIC.test(topic)
+        ? slot % 2 === 0
+          ? "South Korean city transport concept: a simplified green subway car, a blue city bus and an orange taxi side by side as clean flat-color shapes on a plain light backdrop. Every vehicle surface is completely blank: no roof lamp, route number, destination display, emblem, license plate, sticker or window signage. No street, buildings or signs."
+          : "A plain unmarked transit card resting beside a blank round card reader on a soft neutral background. The card and reader carry no printing, logo, number or symbol. No people or hands."
       : /food|restaurant|dietary|spicy/i.test(topic)
         ? slot % 2 === 0
           ? "Show a Korean restaurant customer communicating with a server, with no menus, no papers, no windows, no screens, no signs: only Korean banchan and metal utensils on a table against a plain wall. All signs and menus must be blank."
           : "Show a close-up Korean meal with banchan, metal spoon and chopsticks, fresh vegetables and chili peppers. No menus, labels, signs or text."
         : `Illustrate ${topic} as a wordless scene in a recognizable South Korean setting, with no writing.`;
   const corrective=(env.MEDIA_GENERATION_REVISION === 4) ? recoveryScene(topic,env.MEDIA_RECOVERY_REASONS || []) : "";
-  const prompt = `${corrective} Create one high-quality, photographic-style wordless editorial illustration. South Korea only. SCENE: ${focus} ${slot % 2 === 0 ? "Wide scene showing the practical situation" : "Close-up detail illustrating a different aspect of this topic"}. ${variant ? "Use a simpler composition without faces or hands." : ""} Warm natural colors, clean realistic editorial illustration, 16:9. Korean context: if dining, use Korean banchan, metal spoon and chopsticks and Korean dishes; if transit, a contemporary Seoul transit setting without claiming a real station; if greetings, a culturally appropriate Korean gesture. No Japanese landmarks, tatami, torii, sushi, kimono or non-Korean cultural markers. ABSOLUTELY NO TEXT OR TYPOGRAPHY anywhere: no letters of any language, no Hangul, no English words, no numbers, no labels, menu writing, sign writing, speech bubbles or charts. Leave menus, screens and signs blank. Show only pictorial food and context. No logos, brands, prices or maps. No invented documentary evidence or named real locations. This is a labeled conceptual illustration, not a stock photo. Do not fetch or copy stock images.`;
+  // The corrective batch asks for a plain flat composition; the rest of the prompt must not contradict it.
+  const scene = corrective && focus.startsWith("Illustrate ")
+    ? `Illustrate ${topic} with a few topic-specific objects on a plain backdrop, with no writing.`
+    : focus;
+  const prompt = `${corrective} Create one high-quality, ${corrective ? "simple flat-color" : "photographic-style"} wordless editorial illustration. South Korea only. SCENE: ${scene} ${corrective ? (slot % 2 === 0 ? "Simple composition of the key subjects" : "Close-up of one key subject") : slot % 2 === 0 ? "Wide scene showing the practical situation" : "Close-up detail illustrating a different aspect of this topic"}. ${variant ? "Use a simpler composition without faces or hands." : ""} Warm natural colors, ${corrective ? "clean flat" : "clean realistic"} editorial illustration, 16:9. Korean context: if dining, use Korean banchan, metal spoon and chopsticks and Korean dishes; if transit, simplified Korean subway, bus or taxi shapes with blank surfaces and no signage, without claiming a real station; if greetings, a culturally appropriate Korean gesture. No Japanese landmarks, tatami, torii, sushi, kimono or non-Korean cultural markers. ABSOLUTELY NO TEXT OR TYPOGRAPHY anywhere: no letters of any language, no Hangul, no English words, no numbers, no labels, menu writing, sign writing, speech bubbles or charts. Leave menus, screens and signs blank. Show only pictorial objects and context. No logos, brands, prices or maps. No invented documentary evidence or named real locations. This is a labeled conceptual illustration, not a stock photo. Do not fetch or copy stock images.`;
   const run = await reserve(env, `${site}/${slug}`, prompt);
   const now = new Date().toISOString();
   const claim = cached
@@ -388,15 +413,22 @@ async function createImage(
     actual = imageCost(raw.usageMetadata || {}, !!image);
     await settle(env, run, actual, "complete");
     if (!image) {
+      // Keep the provider's own reason so the next stop is diagnosable.
+      const finish = String(
+        raw.candidates?.[0]?.finishReason || raw.promptFeedback?.blockReason || "EMPTY",
+      ).slice(0, 40);
+      const note = parts
+        .filter((p: any) => !p.thought && typeof p.text === "string")
+        .map((p: any) => p.text)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .slice(0, 200);
       await env.WORKBOARD_DB.prepare(
-        "UPDATE creative_requests SET status='failed',error='No image returned' WHERE id=?",
+        "UPDATE creative_requests SET status='no_image',error=?,updated_at=? WHERE id=?",
       )
-        .bind(id)
+        .bind(`No image returned: ${finish}${note ? " — " + note : ""}`, new Date().toISOString(), id)
         .run();
-      throw new HttpError(
-        409,
-        "MEDIA_REVIEW: Gemini가 이미지를 반환하지 않았습니다.",
-      );
+      throw new NoImageReturned(finish);
     }
     const data = bytes(image.data);
     if (data.byteLength > 12 * 1024 * 1024)
@@ -482,7 +514,15 @@ export async function generatedPhoto(
       previous?.result_json &&
       JSON.parse(previous.result_json).visual_review?.policy === VISUAL_POLICY
     );
-    const photo = await createImage(env, site, slug, topic, slot, variant);
+    let photo: StockPhoto;
+    try {
+      photo = await createImage(env, site, slug, topic, slot, variant);
+    } catch (e) {
+      // A known empty answer counts as one rejected candidate; the second candidate still runs.
+      if (!(e instanceof NoImageReturned)) throw e;
+      reasons.push(`이미지가 생성되지 않았습니다 (${e.reason}).`);
+      continue;
+    }
     const checked = await reviewPhoto(env, site, slug, topic, photo);
     await env.WORKBOARD_DB.prepare(
       "UPDATE creative_requests SET result_json=?,updated_at=? WHERE id=?",

@@ -7,7 +7,7 @@ import {ProviderWait} from "../server/model";
 import {researchSearchQueries,topicSourceFilter,assertTopicEvidence} from "../server/strategy";
 import {applyModelSettings,saveModels} from "../server/model-settings";
 import {importLicensedMedia} from "../server/media-import";
-import {generatedPhoto,reviewPhoto,imageCost,assertReviewedPhotos} from "../server/generated-media";
+import {generatedPhoto,reviewPhoto,imageCost,assertReviewedPhotos,NoImageReturned} from "../server/generated-media";
 import { test } from "node:test";
 import { parseGemini } from "../server/gemini";
 import { workerModel, reviewModel, editorModel } from "../server/model";
@@ -2022,4 +2022,54 @@ test("legacy failure messages map to recovery classes and retries stay bounded p
  assert.equal(boostedTokens(7000,0),7000);assert.equal(boostedTokens(7000,1),14000);assert.equal(boostedTokens(12000,1),16000);assert.equal(boostedTokens(20000,1),20000);
  assert.equal(classifyMessage("AI 응답을 받지 못했습니다 (시간 초과 또는 연결 오류). 비용이 확인되지 않아 자동 재시도하지 않았습니다.","editor"),"unknown");
  assert.equal(planAutoRetry({},"editor","unknown",true),0);
+});
+
+test("corrective image scenes never forbid the subject a transport or street topic is about",()=>{
+ const transport=recoveryScene("Seoul Transport Comparison: Subway, Bus, or Taxi?",["택시 표시등 글자"]);
+ assert.equal(/No [^.]*\bvehicles\b/.test(transport),false);assert.ok(transport.includes("completely blank surfaces"));
+ const walk=recoveryScene("How do you plan a local Seoul neighbourhood walk?",[]);
+ assert.equal(/No [^.]*\bstreets\b/.test(walk),false);assert.ok(walk.includes("blank facades"));
+ const greeting=recoveryScene("Korean greetings and bowing",[]);
+ assert.ok(/No [^.]*vehicles/.test(greeting));assert.ok(/No [^.]*streets/.test(greeting));
+ assert.equal(recoveryScene("Business etiquette in Seoul",[]).includes("completely blank surfaces"),false);
+});
+
+test("an empty image answer counts as one candidate, the batch continues and the provider reason is kept",async()=>{
+ const {env,d}=environment();Object.assign(env,{AI_ENABLED:"true",AI_PROVIDER:"gemini",GEMINI_IMAGES_ENABLED:"true",GEMINI_API_KEY:"test",NATIVE_BLOG_SUPABASE_URL:"https://test.supabase.co",NATIVE_BLOG_SUPABASE_KEY:"test",MEDIA_GENERATION_REVISION:4,MEDIA_RECOVERY_REASONS:["택시 표시등에 글자"]});
+ const topic="Seoul Transport Comparison: Subway, Bus, or Taxi?";const pixels=new Uint8Array([137,80,78,71,13,10,26,10]);
+ const old=globalThis.fetch;const prompts:string[]=[];let audits=0;
+ globalThis.fetch=async(url,init)=>{
+  if(String(url).includes("gemini-3.1-flash-image:")){prompts.push(JSON.parse(String(init?.body)).contents[0].parts[0].text);
+   return prompts.length===1?Response.json({candidates:[{finishReason:"IMAGE_OTHER",content:{parts:[]}}],usageMetadata:{promptTokenCount:535}}):Response.json({candidates:[{content:{parts:[{inlineData:{mimeType:"image/png",data:btoa(String.fromCharCode(...pixels))}}]}}],usageMetadata:{promptTokenCount:535,candidatesTokensDetails:[{modality:"IMAGE",tokenCount:1120}]}});}
+  if(String(url).includes("gemini-3.1-pro-preview:")){audits++;return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify({approved:true,reason:"글자 없는 교통 삽화"})}]}}],usageMetadata:{promptTokenCount:100,candidatesTokenCount:20}});}
+  if(init?.method==="POST")return new Response("",{status:200});
+  return new Response(pixels,{headers:{"Content-Type":"image/png"}});
+ };
+ try{
+  const photo=await generatedPhoto(env,"koreadecode","transport",topic,0);
+  assert.ok(photo.id.endsWith("-v4-0-1"));assert.equal(photo.visual_review?.approved,true);assert.equal(prompts.length,2);assert.equal(audits,1);
+  const empty=d.sqlite.prepare("SELECT status,error FROM creative_requests WHERE id='koreadecode-transport-gemini-image-v4-0-0'").get() as any;
+  assert.equal(empty.status,"no_image");assert.ok(empty.error.includes("IMAGE_OTHER"));
+  // The corrective prompt keeps the vehicles the topic is about and does not ask for a photograph.
+  assert.ok(prompts[0].includes("Every vehicle surface is completely blank"));
+  assert.equal(/No [^.]*\bvehicles\b/.test(prompts[0]),false);assert.equal(prompts[0].includes("photographic-style"),false);
+ }finally{globalThis.fetch=old;}
+});
+
+test("a legacy empty-image record is skipped without a paid repeat",async()=>{
+ const {env,d}=environment();Object.assign(env,{AI_ENABLED:"true",AI_PROVIDER:"gemini",GEMINI_IMAGES_ENABLED:"true",GEMINI_API_KEY:"test",NATIVE_BLOG_SUPABASE_URL:"https://test.supabase.co",NATIVE_BLOG_SUPABASE_KEY:"test",MEDIA_GENERATION_REVISION:4});
+ d.sqlite.prepare("INSERT INTO creative_requests(id,site_id,kind,prompt,status,error,created_at,updated_at) VALUES('koreadecode-legacy-gemini-image-v4-0-0','koreadecode','image','old','failed','No image returned','now','now')").run();
+ const old=globalThis.fetch;let generates=0;
+ globalThis.fetch=async(url,init)=>{
+  if(String(url).includes("gemini-3.1-flash-image:")){generates++;return Response.json({candidates:[{finishReason:"NO_IMAGE",content:{parts:[{text:"Cannot draw that."}]}}],usageMetadata:{promptTokenCount:500}});}
+  throw Error("unexpected "+url);
+ };
+ try{
+  await assert.rejects(()=>generatedPhoto(env,"koreadecode","legacy","Korean greetings",0),(e:any)=>e instanceof ImageCandidatesRejected&&e.reasons.length===2&&e.reasons.every((r:string)=>r.includes("이미지가 생성되지 않았습니다")));
+  assert.equal(generates,1);
+  const second=d.sqlite.prepare("SELECT status,error FROM creative_requests WHERE id='koreadecode-legacy-gemini-image-v4-0-1'").get() as any;
+  assert.equal(second.status,"no_image");assert.ok(second.error.includes("NO_IMAGE — Cannot draw that."));
+  await assert.rejects(()=>generatedPhoto(env,"koreadecode","legacy","Korean greetings",0),ImageCandidatesRejected);assert.equal(generates,1);
+  assert.ok(new NoImageReturned("X").message.includes("MEDIA_REVIEW"));
+ }finally{globalThis.fetch=old;}
 });
