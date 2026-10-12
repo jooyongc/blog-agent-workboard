@@ -291,7 +291,7 @@ async function createImage(
       : TRANSPORT_TOPIC.test(topic)
         ? slot % 2 === 0
           ? "South Korean city transport concept: a simplified green subway car, a blue city bus and an orange taxi side by side as clean flat-color shapes on a plain light backdrop. Every vehicle surface is completely blank: no roof lamp, route number, destination display, emblem, license plate, sticker or window signage. No street, buildings or signs."
-          : "A plain unmarked transit card resting beside a blank round card reader on a soft neutral background. The card and reader carry no printing, logo, number or symbol. No people or hands."
+          : "Close-up of a simplified green Seoul subway train stopped beside a plain platform with blank screen doors, with a blue city bus and an orange taxi behind it, as clean flat-color shapes on a plain light backdrop. Every surface is blank: no route number, destination display, emblem, license plate, sign or screen content. No people."
       : /food|restaurant|dietary|spicy/i.test(topic)
         ? slot % 2 === 0
           ? "Show a Korean restaurant customer communicating with a server, with no menus, no papers, no windows, no screens, no signs: only Korean banchan and metal utensils on a table against a plain wall. All signs and menus must be blank."

@@ -2052,6 +2052,9 @@ test("an empty image answer counts as one candidate, the batch continues and the
   assert.equal(empty.status,"no_image");assert.ok(empty.error.includes("IMAGE_OTHER"));
   // The corrective prompt keeps the vehicles the topic is about and does not ask for a photograph.
   assert.ok(prompts[0].includes("Every vehicle surface is completely blank"));
+  // The second slot must still show recognizable transport; an abstract card scene was rejected as off-topic.
+  const second=await generatedPhoto(env,"koreadecode","transport",topic,1);
+  assert.ok(prompts.at(-1)!.includes("subway train")&&prompts.at(-1)!.includes("city bus"));assert.equal(second.visual_review?.approved,true);
   assert.equal(/No [^.]*\bvehicles\b/.test(prompts[0]),false);assert.equal(prompts[0].includes("photographic-style"),false);
  }finally{globalThis.fetch=old;}
 });
