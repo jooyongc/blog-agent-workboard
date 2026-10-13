@@ -523,7 +523,7 @@ export async function onRequest({
         },
         media_assets: (
           await env.WORKBOARD_DB.prepare(
-            "SELECT result_json FROM creative_requests WHERE site_id=? AND kind='image' AND status='complete' AND json_extract(result_json,'$.visual_review.approved')=1 AND json_extract(result_json,'$.visual_review.policy')='korea-topic-no-text-v2' ORDER BY created_at DESC LIMIT 30",
+            "SELECT result_json FROM creative_requests WHERE site_id=? AND kind='image' AND status='complete' AND json_extract(result_json,'$.visual_review.approved')=1 AND json_extract(result_json,'$.visual_review.policy')='korea-topic-photographic-v3' ORDER BY created_at DESC LIMIT 30",
           )
             .bind(id)
             .all<{ result_json: string }>()

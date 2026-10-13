@@ -25,7 +25,7 @@ export class NoImageReturned extends HttpError {
 function noImageRecord(status: string, error: string | null) {
   return status === "no_image" || (status === "failed" && /^No image returned/.test(error || ""));
 }
-export const VISUAL_POLICY = "korea-topic-no-text-v2";
+export const VISUAL_POLICY = "korea-topic-photographic-v3";
 export function generatedImagesReady(env: Env) {
   return (
     env.GEMINI_IMAGES_ENABLED === "true" &&
@@ -186,7 +186,7 @@ export async function reviewPhoto(
     photo.visual_review.policy === VISUAL_POLICY
   )
     return photo;
-  const id = `${site}-${slug}-visual-v2-${photo.id}`.replace(
+  const id = `${site}-${slug}-visual-v3-${photo.id}`.replace(
     /[^a-z0-9-]/gi,
     "-",
   );
@@ -213,7 +213,7 @@ export async function reviewPhoto(
   const audit = await modelJson(
     env,
     `${site}/${slug}`,
-    'You are the senior visual quality reviewer for a South Korea editorial blog. Inspect the actual attached image. Reject Japanese or other-country markers, irrelevant generic stock, misleading documentary claims, distorted hands/faces/objects, unreadable fake text, stock-preview watermarks and cultural inaccuracies. Incidental authentic logos or signage can remain in licensed Adobe Stock photographs; reject invented logos in generated imagery. Require clear topic relevance and plausible South Korean context. Generated images are explicitly labeled conceptual illustrations, not photographs proving facts or actual locations. For generated images (Gemini or Adobe Firefly), reject ANY visible letters, words or numbers anywhere, including menu panels, signs and icons, even if apparently readable or correct. Blank menus/screens and purely pictorial symbols are acceptable. For Adobe Stock, genuine photographed text can remain. Do not require photorealism, named locations or text. Return JSON {approved:boolean,reason:"short Korean explanation"}. Approve only if the image can credibly illustrate the supplied topic.',
+    'You are the senior visual quality reviewer for a South Korea editorial blog. Inspect the actual attached image. Reject Japanese or other-country markers, irrelevant generic stock, misleading documentary claims, distorted hands/faces/objects, unreadable fake text, stock-preview watermarks and cultural inaccuracies. Incidental authentic logos or signage can remain in licensed Adobe Stock photographs; reject invented logos in generated imagery. Require clear topic relevance and plausible South Korean context. Require photographic or richly realistic editorial quality; reject flat vector art, simplistic cartoons and generic abstract diagrams. A transport topic must visibly feature recognizable transport, not just an ambiguous card or reader. Generated images are explicitly labeled conceptual illustrations, not photographs proving facts or actual locations. For generated images (Gemini or Adobe Firefly), reject ANY visible letters, words or numbers anywhere, including menu panels, signs and icons, even if apparently readable or correct. Blank menus/screens and purely pictorial symbols are acceptable. For Adobe Stock, genuine photographed text can remain. Do not require a named real location or readable text. Natural photographic quality is required. Return JSON {approved:boolean,reason:"short Korean explanation"}. Approve only if the image can credibly illustrate the supplied topic.',
     {
       topic,
       alt: photo.alt,
@@ -290,19 +290,15 @@ async function createImage(
       ? "Show ordering at a Korean restaurant kiosk. The screen must be blank with only abstract pictorial shapes, absolutely no letters or numbers. Include Korean banchan and metal utensils for context."
       : TRANSPORT_TOPIC.test(topic)
         ? slot % 2 === 0
-          ? "South Korean city transport concept: a simplified green subway car, a blue city bus and an orange taxi side by side as clean flat-color shapes on a plain light backdrop. Every vehicle surface is completely blank: no roof lamp, route number, destination display, emblem, license plate, sticker or window signage. No street, buildings or signs."
-          : "Close-up of a simplified green Seoul subway train stopped beside a plain platform with blank screen doors, with a blue city bus and an orange taxi behind it, as clean flat-color shapes on a plain light backdrop. Every surface is blank: no route number, destination display, emblem, license plate, sign or screen content. No people."
+          ? "Photographic editorial scene of South Korean city transport: a recognizable green-striped Seoul subway train at a modern platform, with Korean blue low-floor city buses and orange taxis in an adjoining transport interchange. Authentic metal and glass textures, natural daylight, realistic perspective and depth. Frame signs, brand emblems, taxi roof lights and license plates outside the shot; signage in the background is out of focus. Do not replace vehicles with icons."
+          : "Photographic close view of a recognizable Seoul city bus and an orange taxi at a South Korean transport interchange, with a subway-platform entrance in the background. Realistic bodywork, tires, pavement and reflections; natural editorial lighting. Crop route displays, roof lamps, license plates and logos outside the camera framing. Keep both actual vehicles clearly visible; never substitute a card, reader or flat shapes."
       : /food|restaurant|dietary|spicy/i.test(topic)
         ? slot % 2 === 0
           ? "Show a Korean restaurant customer communicating with a server, with no menus, no papers, no windows, no screens, no signs: only Korean banchan and metal utensils on a table against a plain wall. All signs and menus must be blank."
           : "Show a close-up Korean meal with banchan, metal spoon and chopsticks, fresh vegetables and chili peppers. No menus, labels, signs or text."
         : `Illustrate ${topic} as a wordless scene in a recognizable South Korean setting, with no writing.`;
   const corrective=(env.MEDIA_GENERATION_REVISION === 4) ? recoveryScene(topic,env.MEDIA_RECOVERY_REASONS || []) : "";
-  // The corrective batch asks for a plain flat composition; the rest of the prompt must not contradict it.
-  const scene = corrective && focus.startsWith("Illustrate ")
-    ? `Illustrate ${topic} with a few topic-specific objects on a plain backdrop, with no writing.`
-    : focus;
-  const prompt = `${corrective} Create one high-quality, ${corrective ? "simple flat-color" : "photographic-style"} wordless editorial illustration. South Korea only. SCENE: ${scene} ${corrective ? (slot % 2 === 0 ? "Simple composition of the key subjects" : "Close-up of one key subject") : slot % 2 === 0 ? "Wide scene showing the practical situation" : "Close-up detail illustrating a different aspect of this topic"}. ${variant ? "Use a simpler composition without faces or hands." : ""} Warm natural colors, ${corrective ? "clean flat" : "clean realistic"} editorial illustration, 16:9. Korean context: if dining, use Korean banchan, metal spoon and chopsticks and Korean dishes; if transit, simplified Korean subway, bus or taxi shapes with blank surfaces and no signage, without claiming a real station; if greetings, a culturally appropriate Korean gesture. No Japanese landmarks, tatami, torii, sushi, kimono or non-Korean cultural markers. ABSOLUTELY NO TEXT OR TYPOGRAPHY anywhere: no letters of any language, no Hangul, no English words, no numbers, no labels, menu writing, sign writing, speech bubbles or charts. Leave menus, screens and signs blank. Show only pictorial objects and context. No logos, brands, prices or maps. No invented documentary evidence or named real locations. This is a labeled conceptual illustration, not a stock photo. Do not fetch or copy stock images.`;
+  const prompt = `Create a high-quality photographic editorial image with natural light, rich authentic textures, realistic perspective and depth. South Korea only. SCENE: ${focus} ${slot % 2 === 0 ? "Wide editorial overview" : "Detailed editorial view of a different aspect of the topic"}. ${corrective} ${variant ? "Use a different camera angle that crops writing and problem details out, preserving the subject and photographic realism." : ""} Do not use vector art, flat cartoons, abstract icons or empty studio shapes. Avoid readable writing by camera framing, selective focus or omission of small printed surfaces. No fake letters, numbers, brands, prices, maps or documentary claims of a named real location. No Japanese or other-country markers. This is an AI-generated editorial illustration labeled as such, never evidence of facts. Do not copy stock photographs.`;
   const run = await reserve(env, `${site}/${slug}`, prompt);
   const now = new Date().toISOString();
   const claim = cached

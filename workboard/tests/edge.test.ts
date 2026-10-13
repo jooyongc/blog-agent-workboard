@@ -1817,7 +1817,7 @@ test("confirmed visual rejection schedules only one adaptive batch and unknown o
 });
 test("adaptive batch reuses an already approved slot without a paid request",async()=>{
  const {env,d}=environment();Object.assign(env,{AI_PROVIDER:"gemini",GEMINI_IMAGES_ENABLED:"true",GEMINI_API_KEY:"test",NATIVE_BLOG_SUPABASE_KEY:"test",MEDIA_GENERATION_REVISION:4});
- const photo={id:"koreabylocal-cache-photo-gemini-image-v3-0-0",url:"https://test.supabase.co/one.jpg",visual_review:{approved:true,policy:"korea-topic-no-text-v2"}};
+ const photo={id:"koreabylocal-cache-photo-gemini-image-v3-0-0",url:"https://test.supabase.co/one.jpg",visual_review:{approved:true,policy:"korea-topic-photographic-v3"}};
  d.sqlite.prepare("INSERT INTO creative_requests(id,site_id,kind,prompt,status,result_json,created_at,updated_at) VALUES(?,'koreabylocal','image','old','complete',?,'now','now')").run(photo.id,JSON.stringify(photo));
  const before=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw Error("No paid retry");};
  try{const restored=await generatedPhoto(env,"koreabylocal","cache-photo","Korean scene",0);assert.equal(restored.id,photo.id);assert.equal(restored.fresh,false);assert.equal(calls,0);}finally{globalThis.fetch=before;}
@@ -1836,9 +1836,9 @@ test("photo workflow recovers confirmed rejection once then waits for originals 
  d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES('bounded-photo','bounded-topic',?,'photo_editor','pending',?,'now','now')").run(w.site_id,JSON.stringify(payload));
  const insert=d.sqlite.prepare("INSERT INTO creative_requests(id,site_id,kind,prompt,status,result_json,created_at,updated_at) VALUES(?,?,?,'old','complete',?,'now','now')");
  for(const rev of [3,4])for(const variant of [0,1]){
-  const id=w.site_id+'-'+slug+'-gemini-image-v'+rev+'-0-'+variant;const review={approved:false,reason:"가짜 문자와 손가락 왜곡",policy:"korea-topic-no-text-v2"};
+  const id=w.site_id+'-'+slug+'-gemini-image-v'+rev+'-0-'+variant;const review={approved:false,reason:"가짜 문자와 손가락 왜곡",policy:"korea-topic-photographic-v3"};
   const photo={id,url:"https://agkkvtfwqmzgbrqhvohs.supabase.co/storage/v1/object/public/workboard-media/gemini/test.jpg",alt:"Seoul Korea",provider:"Gemini",visual_review:review};
-  insert.run(id,w.site_id,"image",JSON.stringify(photo));insert.run(w.site_id+'-'+slug+'-visual-v2-'+id,w.site_id,"visual_review",JSON.stringify(review));
+  insert.run(id,w.site_id,"image",JSON.stringify(photo));insert.run(w.site_id+'-'+slug+'-visual-v3-'+id,w.site_id,"visual_review",JSON.stringify(review));
  }
  const before=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw Error("No duplicate paid calls");};
  try{
@@ -2030,7 +2030,7 @@ test("corrective image scenes never forbid the subject a transport or street top
  const walk=recoveryScene("How do you plan a local Seoul neighbourhood walk?",[]);
  assert.equal(/No [^.]*\bstreets\b/.test(walk),false);assert.ok(walk.includes("blank facades"));
  const greeting=recoveryScene("Korean greetings and bowing",[]);
- assert.ok(/No [^.]*vehicles/.test(greeting));assert.ok(/No [^.]*streets/.test(greeting));
+ assert.ok(greeting.includes("No unrelated vehicles or streets"));
  assert.equal(recoveryScene("Business etiquette in Seoul",[]).includes("completely blank surfaces"),false);
 });
 
@@ -2050,12 +2050,12 @@ test("an empty image answer counts as one candidate, the batch continues and the
   assert.ok(photo.id.endsWith("-v4-0-1"));assert.equal(photo.visual_review?.approved,true);assert.equal(prompts.length,2);assert.equal(audits,1);
   const empty=d.sqlite.prepare("SELECT status,error FROM creative_requests WHERE id='koreadecode-transport-gemini-image-v4-0-0'").get() as any;
   assert.equal(empty.status,"no_image");assert.ok(empty.error.includes("IMAGE_OTHER"));
-  // The corrective prompt keeps the vehicles the topic is about and does not ask for a photograph.
-  assert.ok(prompts[0].includes("Every vehicle surface is completely blank"));
+  // Recovery preserves real vehicles and photographic quality rather than flattening them.
+  assert.ok(prompts[0].includes("photographic realism"));
   // The second slot must still show recognizable transport; an abstract card scene was rejected as off-topic.
   const second=await generatedPhoto(env,"koreadecode","transport",topic,1);
-  assert.ok(prompts.at(-1)!.includes("subway train")&&prompts.at(-1)!.includes("city bus"));assert.equal(second.visual_review?.approved,true);
-  assert.equal(/No [^.]*\bvehicles\b/.test(prompts[0]),false);assert.equal(prompts[0].includes("photographic-style"),false);
+  assert.ok(prompts.at(-1)!.includes("city bus")&&prompts.at(-1)!.includes("taxi"));assert.equal(second.visual_review?.approved,true);
+  assert.equal(/No [^.]*\bvehicles\b/.test(prompts[0]),false);assert.ok(prompts[0].includes("photographic editorial image"));
  }finally{globalThis.fetch=old;}
 });
 
@@ -2076,3 +2076,5 @@ test("a legacy empty-image record is skipped without a paid repeat",async()=>{
   assert.ok(new NoImageReturned("X").message.includes("MEDIA_REVIEW"));
  }finally{globalThis.fetch=old;}
 });
+
+test("image recovery preserves photographic quality and a visible transport subject",()=>{const scene=recoveryScene("Seoul subway bus taxi comparison",["택시 문자"]);assert.ok(scene.includes("photographic realism"));assert.ok(scene.includes("actual vehicles"));assert.ok(scene.includes("generic card reader"));assert.equal(scene.includes("Use clean flat shapes"),false);});
