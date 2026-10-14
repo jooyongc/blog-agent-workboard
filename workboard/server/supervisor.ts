@@ -255,7 +255,7 @@ function compactArticle(article: Article) {
       .join("\n"),
   };
 }
-function compactEvidence(evidence: Evidence, previous:Supervision[] = []) {
+function compactEvidence(evidence: Evidence, previous:Supervision[] = [], lean=false) {
   return Object.fromEntries(
     Object.entries(evidence).map(([lang, brief]) => [
       lang,
@@ -267,7 +267,7 @@ function compactEvidence(evidence: Evidence, previous:Supervision[] = []) {
               {
                 url: source.url,
                 claim: source.claim,
-                evidence: previous.length ? [source.evidence.slice(0,6000),...previous.flatMap(d=>d.claims.filter(c=>c.status==="verified"&&c.source_url===source.url&&typeof c.evidence_quote==="string").map(c=>{const at=source.evidence.indexOf(c.evidence_quote!);return at>=6000?source.evidence.slice(Math.max(0,at-250),at+650):"";}))].filter(Boolean).join("\n") : source.evidence,
+                evidence: previous.length ? [source.evidence.slice(0,lean?700:6000),...previous.flatMap(d=>d.claims.filter(c=>c.status==="verified"&&c.source_url===source.url&&typeof c.evidence_quote==="string").map(c=>{const at=source.evidence.indexOf(c.evidence_quote!);return at>=(lean?700:6000)?source.evidence.slice(Math.max(0,at-(lean?100:250)),at+(lean?350:650)):"";}))].filter(Boolean).join("\n") : source.evidence,
               },
             ]),
           ).values(),
@@ -304,7 +304,7 @@ export async function supervise(
           compactArticle(payload.input.translations[lang]),
         ]),
       ),
-      research_evidence: compactEvidence(payload.research.briefs,payload.final_repair_attempted ? payload.supervision || [] : []),
+      research_evidence: compactEvidence(payload.research.briefs,(payload.final_repair_attempted || payload.compact_audit) ? payload.supervision || [] : [],payload.compact_audit === true),
       previous_verification: payload.quality?.verification,
       structure: Object.fromEntries(
         w.languages.map((l) => [
@@ -315,14 +315,14 @@ export async function supervise(
           },
         ]),
       ),
-      history: (payload.final_repair_attempted ? (payload.supervision || []).slice(-1) : payload.supervision || []).map((d: Supervision) => ({
+      history: ((payload.final_repair_attempted || payload.compact_audit) ? (payload.supervision || []).slice(-1) : payload.supervision || []).map((d: Supervision) => ({
         action: d.action,
         reason: d.reason,
         instructions: d.instructions,
       })),
       round,
     },
-    w.languages.length === 1 ? (payload.user_resume_20261007 ? 4000 : 6000) : 12000,
+    w.languages.length === 1 ? (payload.user_resume_20261007 || payload.compact_audit ? 4000 : 6000) : 12000,
     undefined,
     model,
   );
