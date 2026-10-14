@@ -1,3 +1,4 @@
+import {supervise} from "../server/supervisor";
 import {expireLeases,classifyMessage,planAutoRetry,AUTO_RETRY_LIMIT} from "../server/harness";
 import {boostedTokens} from "../server/model";
 import {convertExhaustedResearch} from "../server/supervisor";
@@ -1883,7 +1884,7 @@ test("each role gets its own bounded recovery and the repeat uses a larger outpu
   const state=d.sqlite.prepare("SELECT stage,status,payload_json FROM agent_workflows WHERE job_id='per-role'").get() as any;
   // Before: one shared counter let the supervisor consume the only retry, so the truncated editor stopped the job.
   assert.equal(state.stage,"photo_editor");assert.equal(state.status,"pending");
-  assert.deepEqual(seen,[{role:"supervisor",max:12000},{role:"supervisor",max:16000},{role:"editor",max:7000},{role:"editor",max:14000}]);
+  assert.deepEqual(seen,[{role:"supervisor",max:6000},{role:"supervisor",max:12000},{role:"editor",max:7000},{role:"editor",max:14000}]);
   assert.deepEqual(JSON.parse(state.payload_json).retries,{"supervisor/0":1,"editor/1":1});
   const waits=d.sqlite.prepare("SELECT agent,error FROM agent_steps WHERE status='waiting' ORDER BY started_at").all() as any[];
   assert.equal(waits.length,2);assert.ok(waits.every(w=>w.error.includes(`자동 복구 1/${AUTO_RETRY_LIMIT}`)));
@@ -2078,3 +2079,5 @@ test("a legacy empty-image record is skipped without a paid repeat",async()=>{
 });
 
 test("image recovery preserves photographic quality and a visible transport subject",()=>{const scene=recoveryScene("Seoul subway bus taxi comparison",["택시 문자"]);assert.ok(scene.includes("photographic realism"));assert.ok(scene.includes("actual vehicles"));assert.ok(scene.includes("generic card reader"));assert.equal(scene.includes("Use clean flat shapes"),false);});
+
+test("single-language Claude senior audit uses a bounded output reservation",async()=>{const {env}=environment();env.AI_PROVIDER="anthropic";env.ANTHROPIC_API_KEY="test";const {w,input,research,decision}=supervisorFixture();let maxTokens=0;const before=globalThis.fetch;globalThis.fetch=async(_url,init)=>{maxTokens=JSON.parse(String(init?.body)).max_tokens;return Response.json({stop_reason:"end_turn",content:[{type:"text",text:JSON.stringify(decision)}],usage:{input_tokens:100,output_tokens:100}});};try{const report=await supervise(env,w,{slug:input.slug,input,research});assert.equal(report.action,"approve");assert.equal(maxTokens,6000);}finally{globalThis.fetch=before;}});

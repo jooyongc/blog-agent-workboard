@@ -322,9 +322,7 @@ export async function supervise(
       })),
       round,
     },
-    payload.final_repair_attempted && w.languages.length === 1 ? 6000 : model.startsWith("gemini-") && w.languages.length === 1
-      ? (payload.user_resume_20261007 ? 4000 : 6000)
-      : 12000,
+    w.languages.length === 1 ? (payload.user_resume_20261007 ? 4000 : 6000) : 12000,
     undefined,
     model,
   );
