@@ -2087,3 +2087,22 @@ test("lean senior audit preserves verified quote windows and the full original e
 test("operator correction permits one new independent audit only against the prior review id",async()=>{const {env}=environment();env.AI_PROVIDER="anthropic";env.ANTHROPIC_API_KEY="test";const {w,input,research,decision}=supervisorFixture();const payload:any={slug:input.slug,input,research,final_repair_attempted:true,supervisor_rounds:4,supervision:[{...decision,run_id:"prior-reviewed"}],operator_review_revision:{prior_run_id:"different",reason:"User approved completing corrected revision"}};let calls=0;const before=globalThis.fetch;globalThis.fetch=async()=>{calls++;return Response.json({stop_reason:"end_turn",content:[{type:"text",text:JSON.stringify(decision)}],usage:{input_tokens:100,output_tokens:100}});};try{await assert.rejects(()=>supervise(env,w,payload));assert.equal(calls,0);payload.operator_review_revision.prior_run_id="prior-reviewed";const report=await supervise(env,w,payload);assert.equal(report.round,5);assert.equal(report.action,"approve");assert.equal(calls,1);payload.supervisor_rounds=5;await assert.rejects(()=>supervise(env,w,payload));assert.equal(calls,1);}finally{globalThis.fetch=before;}});
 
 test("second operator deletion check remains bounded and uses the same senior model",async()=>{const {env}=environment();env.AI_PROVIDER="anthropic";env.ANTHROPIC_API_KEY="test";const {w,input,research,decision}=supervisorFixture();const payload:any={slug:input.slug,input,research,final_repair_attempted:true,supervisor_rounds:5,supervision:[{...decision,run_id:"last-review"}],operator_review_revision:{prior_run_id:"last-review",sequence:2,reason:"Delete the remaining unsupported wording"}};let sent:any;const before=globalThis.fetch;globalThis.fetch=async(_url,init)=>{sent=JSON.parse(String(init?.body));return Response.json({stop_reason:"end_turn",content:[{type:"text",text:JSON.stringify(decision)}],usage:{input_tokens:100,output_tokens:100}});};try{const report=await supervise(env,w,payload);assert.equal(report.round,6);assert.equal(report.model,"claude-sonnet-5-5");assert.equal(sent.output_config.effort,"low");assert.equal(sent.max_tokens,4000);payload.operator_review_revision.sequence=3;payload.supervisor_rounds=6;await assert.rejects(()=>supervise(env,w,payload));}finally{globalThis.fetch=before;}});
+
+
+test("source-grounded completion requires an explicit scope and cannot exceed round seven", async () => {
+  const {env}=environment();env.AI_PROVIDER="anthropic";env.ANTHROPIC_API_KEY="test";
+  const {w,input,research,decision}=supervisorFixture();
+  const payload:any={slug:input.slug,input,research,final_repair_attempted:true,supervisor_rounds:6,supervision:[{...decision,run_id:"last-review"}],operator_review_revision:{prior_run_id:"last-review",sequence:3,reason:"Rebuild only supported facts"}};
+  let calls=0;let sent:any;const before=globalThis.fetch;
+  globalThis.fetch=async(_url,init)=>{calls++;sent=JSON.parse(String(init?.body));return Response.json({stop_reason:"end_turn",content:[{type:"text",text:JSON.stringify(decision)}],usage:{input_tokens:100,output_tokens:100}});};
+  try {
+    await assert.rejects(()=>supervise(env,w,payload));assert.equal(calls,0);
+    payload.operator_review_revision.scope="source-grounded-rebuild";
+    const report=await supervise(env,w,payload);
+    assert.equal(report.round,7);assert.equal(report.action,"approve");
+    assert.equal(sent.max_tokens,2500);assert.equal(sent.output_config.effort,"low");
+    assert.match(JSON.parse(sent.messages[0].content).today,/^\d{4}-\d{2}-\d{2}$/);
+    payload.supervisor_rounds=7;
+    await assert.rejects(()=>supervise(env,w,payload));assert.equal(calls,1);
+  } finally {globalThis.fetch=before;}
+});
