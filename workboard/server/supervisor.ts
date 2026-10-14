@@ -289,7 +289,8 @@ export async function supervise(
 ): Promise<Supervision> {
   const model = reviewModel(env);
   const round = (payload.supervisor_rounds || 0) + 1;
-  if (round > MAX_SUPERVISOR_ROUNDS + (payload.final_repair_attempted ? 1 : 0))
+  const operatorRevision = typeof payload.operator_review_revision?.prior_run_id === "string" && payload.operator_review_revision?.prior_run_id === payload.supervision?.at(-1)?.run_id && typeof payload.operator_review_revision?.reason === "string";
+  if (round > MAX_SUPERVISOR_ROUNDS + (payload.final_repair_attempted ? 1 : 0) + (operatorRevision ? 1 : 0))
     throw new HttpError(
       409,
       "상위 검토의 자동 보완 횟수를 모두 사용했습니다. 새로운 근거 또는 지시가 필요합니다.",
@@ -328,7 +329,7 @@ export async function supervise(
       })),
       round,
     },
-    w.languages.length === 1 ? (payload.user_resume_20261007 || payload.compact_audit ? 4000 : 6000) : 12000,
+    w.languages.length === 1 ? (operatorRevision ? 8000 : payload.user_resume_20261007 || payload.compact_audit ? 4000 : 6000) : 12000,
     undefined,
     model,
   );
