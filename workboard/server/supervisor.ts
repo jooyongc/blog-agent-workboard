@@ -255,6 +255,12 @@ function compactArticle(article: Article) {
       .join("\n"),
   };
 }
+function exactAuditExcerpt(evidence:string,url:string,previous:Supervision[],lean:boolean){
+ const ranges:[number,number][]=[[0,Math.min(evidence.length,lean?700:6000)]];
+ for(const d of previous)for(const c of d.claims){if(c.status!=="verified"||c.source_url!==url||!c.evidence_quote)continue;const at=evidence.indexOf(c.evidence_quote);if(at>=0)ranges.push([Math.max(0,at-(lean?100:250)),Math.min(evidence.length,at+c.evidence_quote.length+(lean?200:650))]);}
+ ranges.sort((a,b)=>a[0]-b[0]);const merged:[number,number][]=[];for(const r of ranges){const last=merged.at(-1);if(last&&r[0]<=last[1])last[1]=Math.max(last[1],r[1]);else merged.push([...r]);}
+ return merged.map(([a,b])=>evidence.slice(a,b)).join("\n");
+}
 function compactEvidence(evidence: Evidence, previous:Supervision[] = [], lean=false) {
   return Object.fromEntries(
     Object.entries(evidence).map(([lang, brief]) => [
@@ -267,7 +273,7 @@ function compactEvidence(evidence: Evidence, previous:Supervision[] = [], lean=f
               {
                 url: source.url,
                 claim: source.claim,
-                evidence: previous.length ? [source.evidence.slice(0,lean?700:6000),...previous.flatMap(d=>d.claims.filter(c=>c.status==="verified"&&c.source_url===source.url&&typeof c.evidence_quote==="string").map(c=>{const at=source.evidence.indexOf(c.evidence_quote!);return at>=(lean?700:6000)?source.evidence.slice(Math.max(0,at-(lean?100:250)),at+(lean?350:650)):"";}))].filter(Boolean).join("\n") : source.evidence,
+                evidence: previous.length ? exactAuditExcerpt(source.evidence,source.url,previous,lean) : source.evidence,
               },
             ]),
           ).values(),
@@ -305,7 +311,7 @@ export async function supervise(
         ]),
       ),
       research_evidence: compactEvidence(payload.research.briefs,(payload.final_repair_attempted || payload.compact_audit) ? payload.supervision || [] : [],payload.compact_audit === true),
-      previous_verification: payload.quality?.verification,
+      previous_verification: payload.compact_audit ? undefined : payload.quality?.verification,
       structure: Object.fromEntries(
         w.languages.map((l) => [
           l,
@@ -315,7 +321,7 @@ export async function supervise(
           },
         ]),
       ),
-      history: ((payload.final_repair_attempted || payload.compact_audit) ? (payload.supervision || []).slice(-1) : payload.supervision || []).map((d: Supervision) => ({
+      history: (payload.compact_audit ? [] : payload.final_repair_attempted ? (payload.supervision || []).slice(-1) : payload.supervision || []).map((d: Supervision) => ({
         action: d.action,
         reason: d.reason,
         instructions: d.instructions,
