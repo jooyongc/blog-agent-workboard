@@ -210,6 +210,7 @@ export async function modelJson(
           signal: AbortSignal.timeout(120000),
           body: JSON.stringify({
             model,
+            ...(["low","medium","high"].includes(String(env.AI_ANTHROPIC_EFFORT)) ? {output_config:{effort:env.AI_ANTHROPIC_EFFORT}} : {}),
             max_tokens: maxTokens,
             system,
             messages: [{ role: "user", content: images?.length ? [{type:"text",text:JSON.stringify(input)},...images.map(image=>({type:"image",source:{type:"base64",media_type:image.mimeType,data:image.data}}))] : JSON.stringify(input) }],
