@@ -24,8 +24,15 @@ export function recoveryScene(topic:string,reasons:string[]){
  const constraints=["Preserve high-quality photographic realism: natural light, authentic material textures, depth and a believable South Korean setting. Do not switch to flat icons, cartoons, vector art, silhouettes or featureless abstract shapes. Tighten the camera framing or use natural shallow depth of field to omit text-prone surfaces, rather than deleting the topic or its surroundings."];
  if(transport)constraints.push("Keep recognizable subway trains, city buses or taxis as actual vehicles. Crop roof signs, license plates, brand emblems and destination boards outside the frame. Use completely blank surfaces only on small screens or signboards, never flatten the vehicles or replace them with a generic card reader.");
  else if(!street)constraints.push("No unrelated vehicles or streets: keep the actual subject in a realistic setting.");
- if(street)constraints.push("Keep recognizable Korean streets and architecture, with blank facades only where a text panel would appear; use realistic textures, perspective and natural lighting.");
+ if(street)constraints.push("Keep recognizable Korean residential streets and architecture, using tiled roofs, stone walls, trees and unmarked residential gates for context. Face away from commercial facades; exclude shops, market stalls, storefronts, billboards and signs entirely. Use realistic textures, perspective and natural lighting; do not replace the neighborhood with blank shapes.");
  if(/hand|finger|face|손|인물|얼굴/i.test(issue))constraints.push(/bow|greeting|respect/i.test(topic)?"Use a wider side view of the Korean greeting with hands naturally outside the frame; retain realistic people and the bow itself.":"Choose a photo composition without people, using the relevant subject and realistic surrounding context, not abstract objects.");
  if(/japan|country|일본|국가|문화/i.test(issue))constraints.push("Use the appropriate South Korean context, avoiding conflicting foreign landmarks.");
  return constraints.join(" ");
+}
+
+/** Preserve the latest failed slot; the first recovery may have failed a different slot. */
+export function recordMediaResourceWait(payload:any,error:Error){
+ const previous=payload.media_recovery || {};
+ payload.media_recovery={...previous,state:"needs_resource",reason:error.message,at:new Date().toISOString(),
+   ...(error instanceof ImageCandidatesRejected ? {slot:error.slot,reasons:error.reasons.slice(0,2)} : {})};
 }

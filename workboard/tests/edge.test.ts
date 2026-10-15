@@ -3,7 +3,7 @@ import {expireLeases,classifyMessage,planAutoRetry,AUTO_RETRY_LIMIT} from "../se
 import {boostedTokens} from "../server/model";
 import {convertExhaustedResearch} from "../server/supervisor";
 import {planFinalCorrection} from "../server/supervisor";
-import {ImageCandidatesRejected,planMediaRecovery,recoveryScene} from "../server/media-recovery";
+import {ImageCandidatesRejected,planMediaRecovery,recoveryScene,recordMediaResourceWait} from "../server/media-recovery";
 import {ProviderWait} from "../server/model";
 import {researchSearchQueries,topicSourceFilter,assertTopicEvidence} from "../server/strategy";
 import {applyModelSettings,saveModels} from "../server/model-settings";
@@ -2029,7 +2029,7 @@ test("corrective image scenes never forbid the subject a transport or street top
  const transport=recoveryScene("Seoul Transport Comparison: Subway, Bus, or Taxi?",["택시 표시등 글자"]);
  assert.equal(/No [^.]*\bvehicles\b/.test(transport),false);assert.ok(transport.includes("completely blank surfaces"));
  const walk=recoveryScene("How do you plan a local Seoul neighbourhood walk?",[]);
- assert.equal(/No [^.]*\bstreets\b/.test(walk),false);assert.ok(walk.includes("blank facades"));
+ assert.equal(/No [^.]*\bstreets\b/.test(walk),false);assert.ok(walk.includes("residential streets"));
  const greeting=recoveryScene("Korean greetings and bowing",[]);
  assert.ok(greeting.includes("No unrelated vehicles or streets"));
  assert.equal(recoveryScene("Business etiquette in Seoul",[]).includes("completely blank surfaces"),false);
@@ -2105,4 +2105,24 @@ test("source-grounded completion requires an explicit scope and cannot exceed ro
     payload.supervisor_rounds=7;
     await assert.rejects(()=>supervise(env,w,payload));assert.equal(calls,1);
   } finally {globalThis.fetch=before;}
+});
+
+
+test("exhausted image wait reports the latest slot instead of the first batch failure",()=>{
+ const payload:any={};
+ assert.equal(planMediaRecovery(payload,new ImageCandidatesRejected(0,["old signs"])),true);
+ recordMediaResourceWait(payload,new ImageCandidatesRejected(1,["new signs","new labels"]));
+ assert.equal(payload.media_recovery.state,"needs_resource");
+ assert.equal(payload.media_recovery.slot,1);
+ assert.deepEqual(payload.media_recovery.reasons,["new signs","new labels"]);
+ assert.equal(payload.media_recovery.attempt,1);
+ assert.equal(payload.photo_retry_revision,4);
+ assert.equal(planMediaRecovery(payload,new ImageCandidatesRejected(1,["no extra generation"])),false);
+});
+
+test("neighborhood recovery avoids text-prone commercial facades without flattening the image",()=>{
+ const scene=recoveryScene("Seoul neighbourhood comparison",["fake shop signs"]);
+ assert.ok(scene.includes("residential streets"));
+ assert.ok(scene.includes("exclude shops, market stalls, storefronts, billboards and signs entirely"));
+ assert.ok(scene.includes("photographic realism"));
 });

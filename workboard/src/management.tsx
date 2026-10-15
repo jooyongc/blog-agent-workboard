@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, type FormEvent } from "react";
 import { Link } from "react-router-dom";
+import { VISUAL_POLICY } from "../shared/media-policy";
 import { modelLabel } from "../shared/model-label";
 import { api } from "./api";
 import type { Workspace } from "../shared/types";
@@ -1279,7 +1280,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                 .filter(
                   (photo) =>
                     photo.visual_review?.approved &&
-                    photo.visual_review?.policy === "korea-topic-no-text-v2",
+                    photo.visual_review?.policy === VISUAL_POLICY,
                 );
               const generatedPhotos = (data.media_assets || []).filter(
                 (photo: any) =>
@@ -1305,7 +1306,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                         ready: "예약 대기",
                         review: "검토 필요",
                         budget_wait: "예산 갱신 후 자동 재개",
-                        media_wait: "이미지 확보 대기 · 준비 후 자동 재개",
+                        media_wait: "이미지 원본 필요 · 등록 후 재개",
                         retry_wait: "AI 요청 제한 · 자동 재개 대기",
                         published: "발행 완료",
                         drafted: "초안 저장",
@@ -1322,6 +1323,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                     )[j.status] ?? j.status}
                   </span>
                   <h3>{j.title}</h3>
+                  {j.status === "media_wait" && <p role="status">사진 {previewPhotos.length}/{Math.max(2,Math.min(4,active.strategy.required_images))}장 승인 · 추가 원본 {Math.max(0,Math.max(2,Math.min(4,active.strategy.required_images))-previewPhotos.length)}장 필요</p>}
                   {previewPhotos.length > 0 && (
                     <div className="grid grid-cols-2 gap-3">
                       {previewPhotos.map((photo) => (
@@ -1341,7 +1343,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                             {photo.provider === "Adobe Stock"
                               ? "Adobe Stock 원본"
                               : "AI 삽화"}{" "}
-                            · Pro 검토 완료
+                            · {modelLabel(photo.visual_review?.model || data?.orchestration?.supervisor_model)} 검토 완료
                           </figcaption>
                         </figure>
                       ))}
@@ -1500,8 +1502,8 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                   {data?.workflows?.some((f:any)=>f.job_id===j.id&&f.media_recovery_json&&JSON.parse(f.media_recovery_json).state==="retrying") && <p role="status">이미지 자동 보완 중: 반려 이유에 맞춰 구도를 변경하고 승인된 이미지는 재사용합니다.</p>}
                   {j.status === "media_wait" && (
                     <p>
-                      출처 조사와 글 작성은 저장돼 있습니다. 아래 미디어 등록에
-                      주제와 맞는 원본을 올리면 사진 선정부터 이어집니다. 자동 후보 보완까지 사용한 경우 원본 등록이 필요합니다. 글은 다시 작성하지 않습니다.
+                      출처 조사·글과 승인된 사진은 저장돼 있습니다. 자동 보완까지 사용한 경우 추가 생성은 멈춥니다. 워크스페이스의 미디어 등록에서 주제에 맞는 라이선스 원본을 추가하면 사진 선정부터 이어집니다. 창을 열어 두거나 글을 다시 작성할 필요가 없습니다.
+                      <Link className="button-secondary" to="/workspaces#media-library">부족한 이미지 원본 등록</Link>
                     </p>
                   )}
                   {recovery?.retry_at && (
@@ -1539,10 +1541,9 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                     (f: any) =>
                       f.job_id === j.id &&
                       ["failed", "interrupted", "media_wait"].includes(f.status),
-                  ) && (
+                  ) && !(j.status === "media_wait" && workflow?.photo_retry_revision) && (
                     <button
                       className="button-secondary"
-                      disabled={j.status === "media_wait" && data?.workflows?.some((f:any)=>f.job_id===j.id&&f.photo_retry_revision)}
                       onClick={() =>
                         void api("automation/retry", {
                           method: "POST",
@@ -1820,12 +1821,12 @@ function MediaLibrary({ active }: Pick<Props, "active">) {
     }
   }
   return (
-    <details className="studio-panel form-body">
+    <details id="media-library" open={window.location.hash === "#media-library" ? true : undefined} className="studio-panel form-body">
       <summary>Adobe 웹 생성물·라이선스 미디어 등록</summary>
       <p className="flow-description">
         Firefly 웹에서 만든 이미지·영상 또는 라이선스를 확보한 Adobe Stock
         원본을 저장해 에이전트가 재사용할 수 있습니다. 자료가 부족하면 Gemini로
-        생성하고 Pro가 실제 이미지를 검사합니다. 비용은 사이트별 AI 예산에
+        생성하고 연결 설정에서 선택한 상위 모델이 실제 이미지를 검사합니다. 비용은 사이트별 AI 예산에
         포함되며, 생성 이미지는 AI 삽화로 표시됩니다.
       </p>
       <p>

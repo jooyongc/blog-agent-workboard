@@ -25,7 +25,8 @@ export class NoImageReturned extends HttpError {
 function noImageRecord(status: string, error: string | null) {
   return status === "no_image" || (status === "failed" && /^No image returned/.test(error || ""));
 }
-export const VISUAL_POLICY = "korea-topic-photographic-v3";
+export { VISUAL_POLICY } from "../shared/media-policy";
+import { VISUAL_POLICY } from "../shared/media-policy";
 export function generatedImagesReady(env: Env) {
   return (
     env.GEMINI_IMAGES_ENABLED === "true" &&
@@ -292,6 +293,10 @@ async function createImage(
         ? slot % 2 === 0
           ? "Photographic editorial scene of South Korean city transport: a recognizable green-striped Seoul subway train at a modern platform, with Korean blue low-floor city buses and orange taxis in an adjoining transport interchange. Authentic metal and glass textures, natural daylight, realistic perspective and depth. Frame signs, brand emblems, taxi roof lights and license plates outside the shot; signage in the background is out of focus. Do not replace vehicles with icons."
           : "Photographic close view of a recognizable Seoul city bus and an orange taxi at a South Korean transport interchange, with a subway-platform entrance in the background. Realistic bodywork, tires, pavement and reflections; natural editorial lighting. Crop route displays, roof lamps, license plates and logos outside the camera framing. Keep both actual vehicles clearly visible; never substitute a card, reader or flat shapes."
+      : /neighbou?rhood|street|alley|district|hanok|village/i.test(topic)
+        ? slot % 2 === 0
+          ? "Photographic elevated view along a quiet South Korean residential hanok lane: tiled roofs, textured stone walls, timber gates and distant modern apartments. Face away from shops and commercial facades. No retail frontage, billboards, signs, menu boards or vehicles. Preserve detailed architecture, greenery, natural daylight and realistic depth."
+          : "Photographic view of a leafy residential walking lane in a modern Seoul neighborhood, with apartment architecture and a small park contrasting with traditional residential areas. Frame mature trees, brick walls, unmarked residential entrances and natural street textures. No shops, market stalls, storefronts, neon, billboards, screens, people or vehicles. This must remain a richly detailed believable neighborhood scene, not a blank studio."
       : /food|restaurant|dietary|spicy/i.test(topic)
         ? slot % 2 === 0
           ? "Show a Korean restaurant customer communicating with a server, with no menus, no papers, no windows, no screens, no signs: only Korean banchan and metal utensils on a table against a plain wall. All signs and menus must be blank."

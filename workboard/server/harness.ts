@@ -1,4 +1,4 @@
-import {planMediaRecovery} from "./media-recovery";
+import {planMediaRecovery,recordMediaResourceWait} from "./media-recovery";
 import {applyModelSettings} from "./model-settings";
 import { importLicensedMedia } from "./media-import";
 import type { Env } from "./env";
@@ -915,7 +915,7 @@ export async function advanceHarness(env: Env) {
     };
   } catch (e) {
     if(task.stage === "photo_editor" && planMediaRecovery(payload,e)){
-      const notice="이미지 반려 이유를 반영해 구도를 단순화합니다. 승인된 이미지는 유지하고 새 후보를 한 차례 자동 검사합니다.";
+      const notice="이미지 반려 이유를 반영해 문제 영역을 프레임에서 제외합니다. 승인된 이미지는 유지하고 새 후보를 한 차례 자동 검사합니다.";
       await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET status='pending',error=NULL,payload_json=?,lease_until=NULL,updated_at=? WHERE job_id=?").bind(JSON.stringify(payload),new Date().toISOString(),task.job_id).run();
       await env.WORKBOARD_DB.prepare("UPDATE agent_steps SET status='waiting',error=?,finished_at=? WHERE id=?").bind(notice,new Date().toISOString(),step).run();
       await saveProgress(env,task.job_id,payload,"agent_pending");
@@ -1000,7 +1000,7 @@ export async function advanceHarness(env: Env) {
       e instanceof HttpError &&
       e.message.includes("MEDIA_REVIEW")
     ) {
-      payload.media_recovery={...(payload.media_recovery || {}),state:"needs_resource",reason:e.message,at:new Date().toISOString()};
+      recordMediaResourceWait(payload,e);
       const error =
         "이미지 확보 대기: " +
         e.message.replace("MEDIA_REVIEW: ", "") +
