@@ -1,9 +1,10 @@
-import {supervise} from "../server/supervisor";
+import {nextWake,recoveryAction,controlRoom} from "../server/control-room";
+import {editUnderSupervision,applyEditorialPatch,supervise} from "../server/supervisor";
 import {expireLeases,classifyMessage,planAutoRetry,AUTO_RETRY_LIMIT} from "../server/harness";
 import {boostedTokens} from "../server/model";
 import {convertExhaustedResearch} from "../server/supervisor";
 import {planFinalCorrection} from "../server/supervisor";
-import {ImageCandidatesRejected,planMediaRecovery,recoveryScene,recordMediaResourceWait} from "../server/media-recovery";
+import {ImageCandidatesRejected,planMediaRecovery,recoveryScene,recordMediaResourceWait,planMediaRepair} from "../server/media-recovery";
 import {ProviderWait} from "../server/model";
 import {researchSearchQueries,topicSourceFilter,assertTopicEvidence} from "../server/strategy";
 import {applyModelSettings,saveModels} from "../server/model-settings";
@@ -1503,7 +1504,7 @@ test("a stalled verifier is supervised, edited and approved entirely in the back
     return Response.json({stop_reason:"end_turn",usage:{input_tokens:100,output_tokens:100},content:[{type:"text",text:JSON.stringify(data)}]});
   };
   try {
-    for(let i=0;i<5;i++) await advanceHarness(env);
+    for(let i=0;i<4;i++) await advanceHarness(env);
     const state=d.sqlite.prepare("SELECT stage,status,payload_json FROM agent_workflows").get() as any;
     assert.equal(state.stage,"publisher");assert.equal(state.status,"pending");
     const saved=JSON.parse(state.payload_json);
@@ -1845,7 +1846,14 @@ test("photo workflow recovers confirmed rejection once then waits for originals 
  try{
   const first=await advanceHarness(env) as any;assert.equal(first.recovering,true);
   let row=d.sqlite.prepare("SELECT status,payload_json FROM agent_workflows WHERE job_id='bounded-photo'").get() as any;assert.equal(row.status,"pending");assert.equal(JSON.parse(row.payload_json).photo_retry_revision,4);
-  const second=await advanceHarness(env) as any;assert.equal(second.media_wait,true);
+  const second=await advanceHarness(env) as any;assert.equal(second.recovering,true);
+  const assigned=d.sqlite.prepare("SELECT payload_json FROM agent_workflows WHERE job_id='bounded-photo'").get() as any;
+  assert.equal(JSON.parse(assigned.payload_json).media_repair.slot,0);
+  // The final strategy also has a receipt. Once rejected it must wait, never submit again.
+  const repaired=w.site_id+'-'+slug+'-gemini-image-v5-0-0';
+  const rejectedPhoto={id:repaired,url:"https://agkkvtfwqmzgbrqhvohs.supabase.co/storage/v1/object/public/workboard-media/gemini/repair.jpg",alt:"Seoul Korea",provider:"Gemini",visual_review:{approved:false,reason:"still distorted",policy:"korea-topic-photographic-v3"}};
+  insert.run(repaired,w.site_id,"image",JSON.stringify(rejectedPhoto));insert.run(w.site_id+'-'+slug+'-visual-v3-'+repaired,w.site_id,"visual_review",JSON.stringify(rejectedPhoto.visual_review));
+  const third=await advanceHarness(env) as any;assert.equal(third.media_wait,true);
   row=d.sqlite.prepare("SELECT status,payload_json FROM agent_workflows WHERE job_id='bounded-photo'").get() as any;assert.equal(row.status,"media_wait");assert.equal(JSON.parse(row.payload_json).media_recovery.state,"needs_resource");assert.ok(JSON.parse(row.payload_json).input);assert.equal(calls,0);
  }finally{globalThis.fetch=before;}
 });
@@ -2125,4 +2133,95 @@ test("neighborhood recovery avoids text-prone commercial facades without flatten
  assert.ok(scene.includes("residential streets"));
  assert.ok(scene.includes("exclude shops, market stalls, storefronts, billboards and signs entirely"));
  assert.ok(scene.includes("photographic realism"));
+});
+
+
+test("targeted media repair is once per slot and forbidden for unknown outcomes",()=>{
+ const p:any={photo_retry_revision:4};const e=new ImageCandidatesRejected(0,["fake signs"]);
+ assert.equal(planMediaRepair(p,e,false),false);
+ assert.equal(planMediaRepair(p,e,true),true);
+ assert.equal(planMediaRepair(p,e,true),false);
+ assert.equal(planMediaRepair(p,new ImageCandidatesRejected(1,["bad hands"]),true),true);
+ assert.equal(planMediaRepair(p,e,true),false);
+ assert.equal(planMediaRepair({},e,true),false);
+});
+
+test("targeted edit sends the rejected pixels, meters a new receipt and never regenerates an approved slot",async()=>{
+ const {env,d}=environment();Object.assign(env,{AI_PROVIDER:"gemini",GEMINI_IMAGES_ENABLED:"true",GEMINI_API_KEY:"test",NATIVE_BLOG_SUPABASE_KEY:"test",MEDIA_REPAIR:{slot:1,reasons:["fake signage"]}});
+ const prefix="koreabylocal-edit-image-gemini-image-";const original=globalThis.fetch;
+ const photo={id:prefix+"v4-1-1",provider:"Gemini",url:env.NATIVE_BLOG_SUPABASE_URL+"/storage/v1/object/public/workboard-media/gemini/rejected.jpg",visual_review:{approved:false,reason:"fake signage",policy:"korea-topic-photographic-v3"}};
+ d.sqlite.prepare("INSERT INTO creative_requests(id,site_id,kind,prompt,status,result_json,created_at,updated_at) VALUES(?,'koreabylocal','image','old','complete',?,'now','now')").run(photo.id,JSON.stringify(photo));
+ let edits=0,audits=0;const pixels=new Uint8Array([137,80,78,71,13,10,26,10]);
+ globalThis.fetch=async(url,init)=>{
+  if(String(url).includes("gemini-3.1-flash-image:")){edits++;const parts=JSON.parse(String(init?.body)).contents[0].parts;assert.match(parts[0].text,/Edit the supplied/);assert.equal(parts[1].inlineData.data,btoa(String.fromCharCode(...pixels)));return Response.json({candidates:[{content:{parts:[{inlineData:{mimeType:"image/png",data:parts[1].inlineData.data}}]}}],usageMetadata:{promptTokenCount:100,candidatesTokensDetails:[{modality:"IMAGE",tokenCount:1120}]}});}
+  if(String(url).includes("gemini-3.1-pro-preview:")){audits++;return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify({approved:true,reason:"defects removed"})}]}}],usageMetadata:{promptTokenCount:100,candidatesTokenCount:30}});}
+  if(init?.method==="POST")return new Response("",{status:200});
+  return new Response(pixels,{headers:{"Content-Type":"image/png"}});
+ };
+ try{const repaired=await generatedPhoto(env,"koreabylocal","edit-image","Seoul neighborhoods",1);assert.equal(repaired.id,prefix+"v5-1-0");assert.equal(repaired.visual_review?.approved,true);await generatedPhoto(env,"koreabylocal","edit-image","Seoul neighborhoods",1);assert.equal(edits,1);assert.equal(audits,1);assert.equal((d.sqlite.prepare("SELECT count(*) n FROM ai_runs WHERE actual>0").get() as any).n,2);}finally{globalThis.fetch=original;}
+});
+
+test("provider backoff does not hold other channels and wakes itself without an open browser",async()=>{
+ const {env,d}=environment();const {input,research}=supervisorFixture();
+ stalledJob(d,"backoff","supervisor","retry_wait",{slug:input.slug,input,research,provider_retry_at:new Date(Date.now()+60000).toISOString()});
+ const delay=await nextWake(env);assert.ok(delay!>0 && delay!<=60);
+ const idle=await advanceHarness(env) as any;assert.equal(idle.waiting,true);assert.equal(idle.worked,false);
+ stalledJob(d,"ready-other","writer","pending",{slug:"other",input,research});
+ assert.equal(await nextWake(env),1);
+});
+
+test("control room distinguishes automatic waits from budget and unknown-outcome action gates",async()=>{
+ assert.match(recoveryAction({status:"budget_wait",stage:"writer",scope:"article"}),/変更|변경/);
+ assert.match(recoveryAction({status:"retry_wait",stage:"writer"}),/다른 채널/);
+ assert.match(recoveryAction({status:"interrupted",stage:"writer"}),/중복/);
+ const {env,d}=environment();const {input,research}=supervisorFixture();
+ stalledJob(d,"control-job","editor","pending",{slug:input.slug,input,research});
+ const room=await controlRoom(env);assert.equal(room.length,1);assert.match(room[0].next_action,/보완/);
+});
+
+
+test("editorial patches correct every duplicate while keeping images and unaffected text intact",()=>{
+ const {input}=supervisorFixture();const a=input.translations.en;
+ a.content_md="Supported introduction. Unsupported exact claim.\n\n| Unsupported exact claim | table |\n\n![Seoul](https://example.com/photo.jpg)";
+ const fixed=applyEditorialPatch(a,[{find:"Unsupported exact claim",replace:"Supported limited claim"}]);
+ assert.equal(fixed.content_md.includes("Unsupported exact claim"),false);
+ assert.equal(fixed.content_md.match(/Supported limited claim/g)?.length,2);
+ assert.ok(fixed.content_md.includes("![Seoul](https://example.com/photo.jpg)"));
+ assert.equal(fixed.images,a.images);assert.ok(fixed.content_md.startsWith("Supported introduction."));
+ assert.throws(()=>applyEditorialPatch(a,[{find:"not in the article",replace:"Invented"}]));
+ assert.throws(()=>applyEditorialPatch(a,[{find:"![Seoul](https://example.com/photo.jpg)",replace:""}]));
+});
+
+
+test("small factual corrections use exact patches, keep approved media and still require a new senior approval",async()=>{
+ const {env}=environment();env.ANTHROPIC_API_KEY="test";
+ const {w,input,research,decision}=supervisorFixture();const a=input.translations.en;
+ assert.equal(quality(a,w,"en").passed,true);
+ const phrase=a.content_md.split("\n").find((line:string)=>line.length>40 && !line.startsWith("#"))!;
+ const payload:any={slug:input.slug,input,research,supervision:[{...decision,run_id:"patch-review",action:"edit",target_languages:["en"],claims:[{lang:"en",claim:phrase,status:"unsupported"}]}],supervisor_approval:"old"};
+ const before=globalThis.fetch;let max=0;globalThis.fetch=async(_url,init)=>{const body=JSON.parse(String(init?.body));max=body.max_tokens;assert.match(body.system,/exact local text corrections/);return anthropic({replacements:[{find:phrase,replace:phrase+" "}]});};
+ try{await editUnderSupervision(env,w,payload);assert.equal(max,3000);assert.deepEqual(payload.input.translations.en.images,a.images);assert.equal(payload.supervisor_approval,undefined);assert.deepEqual(payload.editor_completed["patch-review"],["en"]);}finally{globalThis.fetch=before;}
+ assert.equal(classifyMessage("보완 에이전트의 국소 수정 형식을 확인하지 못했습니다.","editor"),"malformed");
+});
+
+test("the queue schedules a future wake even when no job is ready during provider backoff",async()=>{
+ const scheduler=(await import("../../scheduler/index")).default;const before=globalThis.fetch;
+ const sent:any[]=[];let ack=0;globalThis.fetch=async()=>Response.json({worked:false,waiting:true,delay_seconds:37});
+ try{await scheduler.queue({messages:[{ack:()=>ack++,retry:()=>assert.fail("unexpected retry")}]} as any,{WORKBOARD_URL:"https://workboard.test",SCHEDULER_TOKEN:"test",AGENT_QUEUE:{send:async(...args:any[])=>sent.push(args)}} as any);assert.equal(ack,1);assert.equal(sent.length,1);assert.equal(sent[0][1].delaySeconds,37);}finally{globalThis.fetch=before;}
+});
+
+
+test("new shared licensed stock wakes an untouched media wait once, with the original checkpoints retained",async()=>{
+ const {env,d}=environment();const {input,research}=supervisorFixture();input.translations.en.primary_keyword="Seoul neighborhood comparison";
+ const payload:any={slug:input.slug,input,research,photo_retry_revision:4,media_recovery:{state:"needs_resource",reasons:[]},media_repair:{slot:0,state:"complete"}};
+ stalledJob(d,"library-wait","photo_editor","media_wait",payload);
+ d.sqlite.prepare("UPDATE content_jobs SET request_json=? WHERE id='library-wait'").run(JSON.stringify(input));
+ d.sqlite.prepare(`INSERT INTO reusable_media(id,site_id,provider,kind,title,tags_json,url,source_url,license_reference,created_at) VALUES('shared-stock','koreabylocal','Adobe Stock','photo','Seoul neighborhood in South Korea','["neighborhood"]','https://example.com/stock.jpg','https://stock.adobe.com/images/1','licensed owner asset','now')`).run();
+ await recoverWorkflows(env);
+ let state=d.sqlite.prepare("SELECT status,payload_json FROM agent_workflows WHERE job_id='library-wait'").get() as any;
+ assert.equal(state.status,"pending");assert.deepEqual(JSON.parse(state.payload_json).media_library_checked,["shared-stock"]);
+ assert.equal(JSON.parse(state.payload_json).photo_retry_revision,4);
+ d.sqlite.prepare("UPDATE agent_workflows SET status='media_wait' WHERE job_id='library-wait'").run();
+ await recoverWorkflows(env);state=d.sqlite.prepare("SELECT status FROM agent_workflows WHERE job_id='library-wait'").get() as any;
+ assert.equal(state.status,"media_wait");
 });

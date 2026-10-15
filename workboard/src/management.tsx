@@ -1148,6 +1148,11 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
         note="아이디어만 승인하세요. 역할별 에이전트가 작업을 이어서 임시 발행까지 완료합니다."
       />
       {note(error)}
+      {data?.control_room && <section className="studio-panel form-body" aria-label="전체 채널 관제">
+        <h2>전체 채널 관제</h2>
+        <p>한 글이 대기해도 다른 채널은 계속 처리합니다. 자동 복구 경로와 사람이 필요한 항목을 함께 확인하세요.</p>
+        {!data.control_room.length ? <p>대기·복구 중인 작업이 없습니다.</p> : <div className="overflow-x-auto"><table><thead><tr><th>채널·주제</th><th>다음 조치</th><th>최근 진행</th></tr></thead><tbody>{data.control_room.map((task:any)=><tr key={task.job_id}><td>{task.site_id}<br/>{task.title}</td><td>{task.next_action}{task.error && <details><summary>원인</summary>{task.error}</details>}</td><td>{new Date(task.updated_at).toLocaleString("ko-KR",{timeZone:"Asia/Seoul"})}</td></tr>)}</tbody></table></div>}
+      </section>}
       <section className="orchestration-banner">
         <div>
           <strong>Cloudflare 백그라운드 실행</strong>
@@ -1499,7 +1504,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                   </details>
                   {j.error && <p role={j.status === "media_wait" ? "status" : "alert"}>{j.error}</p>}
                   {data?.workflows?.some((f:any)=>f.job_id===j.id&&["assigned","edited"].includes(f.final_repair_state)) && <p role="status">일반 보완에 반복 실패해 상위 검토 모델이 직접 한 차례 보완하고 최종 검증합니다.</p>}
-                  {data?.workflows?.some((f:any)=>f.job_id===j.id&&f.media_recovery_json&&JSON.parse(f.media_recovery_json).state==="retrying") && <p role="status">이미지 자동 보완 중: 반려 이유에 맞춰 구도를 변경하고 승인된 이미지는 재사용합니다.</p>}
+                  {data?.workflows?.some((f:any)=>f.job_id===j.id&&f.media_recovery_json&&["retrying","repairing"].includes(JSON.parse(f.media_recovery_json).state)) && <p role="status">이미지 자동 복구 중: 등록된 라이선스 자료를 다시 찾고, 필요하면 반려 원본의 문제 부분을 편집해 재검토합니다. 승인된 이미지는 유지합니다.</p>}
                   {j.status === "media_wait" && (
                     <p>
                       출처 조사·글과 승인된 사진은 저장돼 있습니다. 자동 보완까지 사용한 경우 추가 생성은 멈춥니다. 워크스페이스의 미디어 등록에서 주제에 맞는 라이선스 원본을 추가하면 사진 선정부터 이어집니다. 창을 열어 두거나 글을 다시 작성할 필요가 없습니다.

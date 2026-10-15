@@ -63,7 +63,7 @@ export async function stockPhotos(
   const uploaded = siteId
     ? (
         await env.WORKBOARD_DB.prepare(
-          "SELECT * FROM reusable_media WHERE site_id=? AND kind='photo' ORDER BY created_at DESC LIMIT 100",
+          "SELECT * FROM reusable_media WHERE kind='photo' AND (site_id=? OR (provider='Adobe Stock' AND length(license_reference)>0)) ORDER BY created_at DESC LIMIT 200",
         )
           .bind(siteId)
           .all<{

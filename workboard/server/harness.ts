@@ -1,4 +1,5 @@
-import {planMediaRecovery,recordMediaResourceWait} from "./media-recovery";
+import {nextWake} from "./control-room";
+import {planMediaRecovery,recordMediaResourceWait,planMediaRepair,ImageCandidatesRejected} from "./media-recovery";
 import {applyModelSettings} from "./model-settings";
 import { importLicensedMedia } from "./media-import";
 import type { Env } from "./env";
@@ -7,7 +8,7 @@ import { workspace, readiness } from "./registry";
 import { research } from "./strategy";
 import { generate } from "./ai";
 import { generatedImagesReady } from "./generated-media";
-import { illustrate, approvedMedia } from "./media";
+import { illustrate, approvedMedia, stockPhotos } from "./media";
 import { verifyGenerated } from "./automation";
 import { quality } from "./seo";
 import { validateDraft } from "./content";
@@ -142,7 +143,7 @@ export function classifyFailure(e: unknown, stage: string): FailureKind {
 /** Fallback for checkpoints written before the class was persisted. */
 export function classifyMessage(message: string, stage: string): FailureKind {
   if (/AI 답변이 완결되지 않았습니다/.test(message)) return "incomplete";
-  if (/AI 응답 형식을 확인하지 못했습니다|글 형식을 확인하지 못했습니다|판단 형식을 확인하지 못했습니다|검증 형식이 올바르지|지시 내용이 없습니다/.test(message))
+  if (/AI 응답 형식을 확인하지 못했습니다|글 형식을 확인하지 못했습니다|판단 형식을 확인하지 못했습니다|검증 형식이 올바르지|지시 내용이 없습니다|국소 수정 형식/.test(message))
     return "malformed";
   if (/AI 응답을 받지 못했습니다/.test(message)) return "unknown";
   if (/일시적으로 요청을 제한/.test(message)) return "transient";
@@ -239,7 +240,7 @@ function wipResearchValid(notes: Record<string, string> | undefined) {
 }
 export async function recoverWorkflows(env: Env, now = Date.now()) {
   const tasks = await env.WORKBOARD_DB.prepare(
-    "SELECT job_id,site_id,stage,status,error,payload_json FROM agent_workflows WHERE status IN ('failed','budget_wait','retry_wait') AND site_id NOT IN (SELECT site_id FROM workspace_records WHERE json_extract(config_json,'$.schedule.owner')='aside') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted')) ORDER BY updated_at LIMIT 100",
+    "SELECT job_id,site_id,stage,status,error,payload_json FROM agent_workflows WHERE status IN ('failed','budget_wait','retry_wait','media_wait') AND site_id NOT IN (SELECT site_id FROM workspace_records WHERE json_extract(config_json,'$.schedule.owner')='aside') AND EXISTS(SELECT 1 FROM content_jobs c WHERE c.id=agent_workflows.job_id AND c.status NOT IN ('cancelled','published','drafted')) ORDER BY updated_at LIMIT 100",
   ).all<{
     job_id: string;
     site_id: string;
@@ -256,6 +257,25 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
     const payload = JSON.parse(task.payload_json);
     let stage = task.stage,
       resume = false;
+    if(task.status==="media_wait" && stage==="photo_editor" && payload.input){
+      const job=await env.WORKBOARD_DB.prepare("SELECT request_json FROM content_jobs WHERE id=?").bind(task.job_id).first<{request_json:string}>();
+      if(job?.request_json===JSON.stringify(payload.input) && await chargeSettled(env,task.site_id,payload.slug,null)){
+        const first=Object.values(payload.input.translations)[0] as any;
+        const candidates=await stockPhotos(env,first.primary_keyword || first.title,0,task.site_id);
+        const seen=new Set(payload.media_library_checked || []);
+        if(candidates.some(p=>!seen.has(p.id))){payload.media_library_checked=candidates.map(p=>p.id);resume=true;}
+      }
+    }
+    if(task.status==="media_wait" && stage==="photo_editor" && payload.photo_retry_revision && payload.media_recovery?.reasons?.length){
+      const job=await env.WORKBOARD_DB.prepare("SELECT request_json FROM content_jobs WHERE id=?").bind(task.job_id).first<{request_json:string}>();
+      if(job?.request_json===JSON.stringify(payload.input)){
+        // Stored recovery reasons may predate the latest failed slot; read actual rejected receipts.
+        const last=await env.WORKBOARD_DB.prepare("SELECT id,result_json FROM creative_requests WHERE site_id=? AND kind='image' AND status='complete' AND substr(id,1,length(?))=? AND json_extract(result_json,'$.visual_review.approved')=0 ORDER BY created_at DESC LIMIT 1").bind(task.site_id,`${task.site_id}-${payload.slug}-gemini-image-v4-`,`${task.site_id}-${payload.slug}-gemini-image-v4-`).first<{id:string;result_json:string}>();
+        if(last){const slot=Number(last.id.match(/-v4-(\d+)-\d+$/)?.[1]);const photo=JSON.parse(last.result_json);
+          if(Number.isInteger(slot) && planMediaRepair(payload,new ImageCandidatesRejected(slot,[photo.visual_review.reason]),await chargeSettled(env,task.site_id,payload.slug,null)))resume=true;
+        }
+      }
+    }
     if (
       (stage === "verifier" ||
         (stage === "publisher" && task.error?.includes("상위 검토 승인"))) &&
@@ -590,7 +610,7 @@ export async function advanceHarness(env: Env) {
     stage: string;
     payload_json: string;
   }>();
-  if (!task) return { worked: false };
+  if (!task) {const delay=await nextWake(env);return {worked:false,waiting:delay!==null,delay_seconds:delay ?? undefined};}
   const now = new Date().toISOString(),
     step = crypto.randomUUID();
   const claim = await env.WORKBOARD_DB.prepare(
@@ -607,7 +627,7 @@ export async function advanceHarness(env: Env) {
   env = await applyModelSettings(env);
   const payload = JSON.parse(task.payload_json),
     w = await workspace(env, task.site_id);
-  env = {...env, MEDIA_GENERATION_REVISION: payload.photo_retry_revision || 3, MEDIA_RECOVERY_REASONS:payload.media_recovery?.reasons || [], AI_OUTPUT_BOOST: outputBoost(payload, task.stage)};
+  env = {...env, MEDIA_GENERATION_REVISION: payload.photo_retry_revision || 3, MEDIA_RECOVERY_REASONS:payload.media_recovery?.reasons || [], MEDIA_REPAIR:payload.media_repair, AI_OUTPUT_BOOST: outputBoost(payload, task.stage)};
   await env.WORKBOARD_DB.prepare(
     "UPDATE content_jobs SET status=?,error=NULL,updated_at=? WHERE id=?",
   )
@@ -674,6 +694,8 @@ export async function advanceHarness(env: Env) {
           payload.input.translations,
         );
       if(payload.media_recovery)payload.media_recovery={...payload.media_recovery,state:"complete",finished_at:new Date().toISOString()};
+      if(payload.media_repair)payload.media_repair={...payload.media_repair,state:"complete"};
+      if(payload.supervision?.length)repairNext="supervisor";
       payload.input.featured_image_url =
         payload.input.translations[w.languages[0]].images?.[0]?.url;
     }
@@ -753,7 +775,7 @@ export async function advanceHarness(env: Env) {
     }
     if (task.stage === "editor") {
       await editUnderSupervision(env, w, payload);
-      repairNext = "photo_editor";
+      repairNext = w.languages.every(l=>approvedMedia(payload.input.translations[l]) && payload.input.translations[l].images.length>=Math.max(2,w.strategy.required_images)) ? "supervisor" : "photo_editor";
     }
     if (task.stage === "supervisor") {
       for (const lang of w.languages)
@@ -921,6 +943,13 @@ export async function advanceHarness(env: Env) {
       await saveProgress(env,task.job_id,payload,"agent_pending");
       return {worked:true,job_id:task.job_id,agent:task.stage,recovering:true};
     }
+    if(task.stage === "photo_editor" && planMediaRepair(payload,e,await chargeSettled(env,task.site_id,payload.slug,await roleStarted(env,task.job_id,task.stage)))){
+      const notice="상위 검토가 반려한 원본을 자동 편집합니다. 승인된 사진은 유지하고, 문제 부분만 고친 뒤 다시 픽셀 검토합니다.";
+      await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET status='pending',error=NULL,payload_json=?,lease_until=NULL,updated_at=? WHERE job_id=?").bind(JSON.stringify(payload),new Date().toISOString(),task.job_id).run();
+      await env.WORKBOARD_DB.prepare("UPDATE agent_steps SET status='waiting',error=?,finished_at=? WHERE id=?").bind(notice,new Date().toISOString(),step).run();
+      await saveProgress(env,task.job_id,payload,"agent_pending");
+      return {worked:true,job_id:task.job_id,agent:task.stage,recovering:true};
+    }
     if (e instanceof ProviderWait) {
       const retryKey =
         task.stage +
@@ -959,7 +988,7 @@ export async function advanceHarness(env: Env) {
         return {
           worked: true,
           waiting: true,
-          delay_seconds: delay,
+          delay_seconds: (await nextWake(env)) ?? delay,
           job_id: task.job_id,
           agent: task.stage,
         };

@@ -41,7 +41,7 @@ export default {
     for (const message of batch.messages) {
       try {
         const result = await invoke(env, "harness");
-        if (result.worked)
+        if (result.worked || result.waiting)
           await env.AGENT_QUEUE.send(
             { type: "harness" },
             {

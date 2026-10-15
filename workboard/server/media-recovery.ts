@@ -33,6 +33,19 @@ export function recoveryScene(topic:string,reasons:string[]){
 /** Preserve the latest failed slot; the first recovery may have failed a different slot. */
 export function recordMediaResourceWait(payload:any,error:Error){
  const previous=payload.media_recovery || {};
+ if(error instanceof ImageCandidatesRejected && payload.media_repair?.slot===error.slot){
+  payload.media_repair={...payload.media_repair,state:"rejected"};
+  payload.media_repairs={...(payload.media_repairs || {}),[error.slot]:payload.media_repair};
+ }
  payload.media_recovery={...previous,state:"needs_resource",reason:error.message,at:new Date().toISOString(),
    ...(error instanceof ImageCandidatesRejected ? {slot:error.slot,reasons:error.reasons.slice(0,2)} : {})};
+}
+
+/** One targeted edit after both generation batches failed; never repeat an unknown charge. */
+export function planMediaRepair(payload:any,error:unknown,settled:boolean){
+ if(!(error instanceof ImageCandidatesRejected)||!settled||!payload.photo_retry_revision||payload.media_repairs?.[error.slot] || (payload.media_repair?.slot===error.slot))return false;
+ payload.media_repair={state:"assigned",slot:error.slot,reasons:error.reasons.slice(0,2),at:new Date().toISOString()};
+ payload.media_repairs={...(payload.media_repairs || {}),[error.slot]:payload.media_repair};
+ payload.media_recovery={...(payload.media_recovery || {}),state:"repairing",slot:error.slot,reasons:error.reasons.slice(0,2),at:new Date().toISOString()};
+ return true;
 }

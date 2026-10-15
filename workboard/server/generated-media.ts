@@ -265,7 +265,8 @@ async function createImage(
   slot: number,
   variant: number,
 ): Promise<StockPhoto> {
-  const id = `${site}-${slug}-gemini-image-v${env.MEDIA_GENERATION_REVISION || 3}-${slot}-${variant}`;
+  const repair=env.MEDIA_REPAIR?.slot === slot;
+  const id = `${site}-${slug}-gemini-image-v${repair ? 5 : env.MEDIA_GENERATION_REVISION || 3}-${slot}-${variant}`;
   const cached = await env.WORKBOARD_DB.prepare(
     "SELECT status,error,result_json FROM creative_requests WHERE id=?",
   )
@@ -303,7 +304,22 @@ async function createImage(
           : "Show a close-up Korean meal with banchan, metal spoon and chopsticks, fresh vegetables and chili peppers. No menus, labels, signs or text."
         : `Illustrate ${topic} as a wordless scene in a recognizable South Korean setting, with no writing.`;
   const corrective=(env.MEDIA_GENERATION_REVISION === 4) ? recoveryScene(topic,env.MEDIA_RECOVERY_REASONS || []) : "";
-  const prompt = `Create a high-quality photographic editorial image with natural light, rich authentic textures, realistic perspective and depth. South Korea only. SCENE: ${focus} ${slot % 2 === 0 ? "Wide editorial overview" : "Detailed editorial view of a different aspect of the topic"}. ${corrective} ${variant ? "Use a different camera angle that crops writing and problem details out, preserving the subject and photographic realism." : ""} Do not use vector art, flat cartoons, abstract icons or empty studio shapes. Avoid readable writing by camera framing, selective focus or omission of small printed surfaces. No fake letters, numbers, brands, prices, maps or documentary claims of a named real location. No Japanese or other-country markers. This is an AI-generated editorial illustration labeled as such, never evidence of facts. Do not copy stock photographs.`;
+  let prompt = `Create a high-quality photographic editorial image with natural light, rich authentic textures, realistic perspective and depth. South Korea only. SCENE: ${focus} ${slot % 2 === 0 ? "Wide editorial overview" : "Detailed editorial view of a different aspect of the topic"}. ${corrective} ${variant ? "Use a different camera angle that crops writing and problem details out, preserving the subject and photographic realism." : ""} Do not use vector art, flat cartoons, abstract icons or empty studio shapes. Avoid readable writing by camera framing, selective focus or omission of small printed surfaces. No fake letters, numbers, brands, prices, maps or documentary claims of a named real location. No Japanese or other-country markers. This is an AI-generated editorial illustration labeled as such, never evidence of facts. Do not copy stock photographs.`;
+  const inputParts:any[]=[];
+  if(repair){
+    const source=await env.WORKBOARD_DB.prepare("SELECT result_json FROM creative_requests WHERE id IN (?,?) AND status='complete' AND json_extract(result_json,'$.visual_review.approved')=0 ORDER BY created_at DESC LIMIT 1").bind(`${site}-${slug}-gemini-image-v4-${slot}-1`,`${site}-${slug}-gemini-image-v4-${slot}-0`).first<{result_json:string|null}>();
+    const photo:StockPhoto|undefined=source?.result_json?JSON.parse(source.result_json):undefined;
+    if(!photo || photo.provider!=="Gemini" || photo.visual_review?.approved!==false)throw new HttpError(409,"MEDIA_REVIEW: 편집 가능한 반려 원본이 없습니다. 라이선스 원본을 기다립니다.");
+    ownedUrl(env,photo.url);
+    const response=await fetch(photo.url,{redirect:"manual",signal:AbortSignal.timeout(30000)});
+    if(!response.ok)throw new ProviderWait(response.status,30);
+    const mimeType=response.headers.get("Content-Type")?.split(";")[0] || "";
+    const data=await response.arrayBuffer();
+    if(!["image/jpeg","image/png","image/webp"].includes(mimeType)||data.byteLength>12*1024*1024)throw new HttpError(409,"MEDIA_REVIEW: 편집 원본 형식을 확인할 수 없습니다.");
+    inputParts.push({inlineData:{mimeType,data:encode(data)}});
+    prompt=`Edit the supplied AI-generated editorial illustration for ${topic}. Preserve its photographic texture, recognisable subject, Korean context and scene quality. Fix these visual defects: ${JSON.stringify(env.MEDIA_REPAIR?.reasons)}. Remove every fake letter, word, numeral and invented logo by replacing only the problematic panels with believable unmarked materials, cropping the affected edge or reframing. Never flatten the whole scene or replace it with an abstract illustration. Keep natural materials, depth and lighting. Return the corrected image, not an explanation. This remains a labeled conceptual illustration, not evidence of a real place.`;
+  }
+  inputParts.unshift({text:prompt});
   const run = await reserve(env, `${site}/${slug}`, prompt);
   const now = new Date().toISOString();
   const claim = cached
@@ -348,7 +364,7 @@ async function createImage(
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            contents: [{ role: "user", parts:inputParts }],
             generationConfig: {
               responseModalities: ["TEXT", "IMAGE"],
               maxOutputTokens: 2048,
@@ -498,14 +514,15 @@ export async function generatedPhoto(
       "MEDIA_REVIEW: 자동 이미지 생성 연결이 필요합니다.",
     );
   // A fallback for one slot must not regenerate an already approved other slot.
-  for(const revision of [3,4])for(const variant of [0,1]){
+  for(const revision of [3,4,5])for(const variant of [0,1]){
     const saved=await env.WORKBOARD_DB.prepare("SELECT result_json FROM creative_requests WHERE id=?").bind(`${site}-${slug}-gemini-image-v${revision}-${slot}-${variant}`).first<{result_json:string|null}>();
     const photo=saved?.result_json?JSON.parse(saved.result_json):null;
     if(photo?.visual_review?.approved && photo.visual_review.policy===VISUAL_POLICY)return {...photo,fresh:false};
   }
   const reasons:string[]=[];
-  for (let variant = 0; variant < 2; variant++) {
-    const id = `${site}-${slug}-gemini-image-v${env.MEDIA_GENERATION_REVISION || 3}-${slot}-${variant}`;
+  const repair=env.MEDIA_REPAIR?.slot===slot;
+  for (let variant = 0; variant < (repair ? 1 : 2); variant++) {
+    const id = `${site}-${slug}-gemini-image-v${repair ? 5 : env.MEDIA_GENERATION_REVISION || 3}-${slot}-${variant}`;
     const previous = await env.WORKBOARD_DB.prepare(
       "SELECT result_json FROM creative_requests WHERE id=?",
     )
@@ -533,7 +550,7 @@ export async function generatedPhoto(
     if (checked.visual_review?.approved)
       return { ...checked, fresh: !hadReview };
     reasons.push(String(checked.visual_review?.reason || "주제 적합성 확인 실패").slice(0,600));
-    if (!hadReview && variant === 0)
+    if (!repair && !hadReview && variant === 0)
       throw new PendingMedia(
         "이미지 후보가 반려됐습니다. 저장된 검토 결과를 유지하고 다음 후보를 준비합니다.",
       );

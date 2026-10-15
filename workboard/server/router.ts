@@ -1,3 +1,4 @@
+import {controlRoom} from "./control-room";
 import {applyModelSettings,modelCatalog,saveModels} from "./model-settings";
 import type { DraftInput, Workspace } from "../shared/types";
 import type { Context } from "./env";
@@ -505,6 +506,7 @@ export async function onRequest({
         .all();
       return json({
         workspace: w,
+        control_room: await controlRoom(env),
         orchestration: {
           runtime: "Cloudflare Queues",
           supervisor_model: reviewModel(env),

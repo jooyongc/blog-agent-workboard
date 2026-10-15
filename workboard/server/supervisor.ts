@@ -350,6 +350,18 @@ export async function supervise(
     at: new Date().toISOString(),
   };
 }
+/** Apply exact local corrections; unaffected article sections and media cannot be rewritten. */
+export function applyEditorialPatch(article:Article,replacements:unknown):Article{
+ if(!Array.isArray(replacements)||!replacements.length||replacements.length>30)throw new HttpError(502,"보완 에이전트의 국소 수정 형식을 확인하지 못했습니다.");
+ let md=article.content_md;
+ for(const patch of replacements){
+  if(typeof patch?.find!=="string"||patch.find.length<6||typeof patch.replace!=="string"||!md.includes(patch.find)||/!\[|AI-generated|Photo:/.test(patch.find+patch.replace))throw new HttpError(502,"보완 에이전트의 국소 수정 형식을 확인하지 못했습니다.");
+  md=md.split(patch.find).join(patch.replace);
+ }
+ const imageBlocks=(text:string)=>JSON.stringify(text.match(/!\[[^\]]*\]\(https:\/\/[^)]+\)/g)||[]);
+ if(imageBlocks(md)!==imageBlocks(article.content_md))throw new HttpError(502,"보완 에이전트의 국소 수정 형식을 확인하지 못했습니다.");
+ return {...article,content_md:md};
+}
 export async function editUnderSupervision(
   env: Env,
   w: Workspace,
@@ -361,10 +373,12 @@ export async function editUnderSupervision(
   for (const lang of decision.target_languages) {
     if (payload.editor_completed[decision.run_id].includes(lang)) continue;
     const original: Article = payload.input.translations[lang];
+    const unsupported=decision.claims.filter(c=>c.lang===lang&&c.status!=="verified");
+    const patchMode=!payload.final_repair_attempted && unsupported.length>0 && unsupported.length<=6 && quality(original,w,lang).passed && !payload.editor_patch_fallback?.[`${decision.run_id}/${lang}`];
     const result = await modelJson(
       env,
       `${w.site_id}/${payload.slug}`,
-      `${SEO_RULES}\nYou are a senior correction editor executing the supervisor's specific assignment. Preserve verified claims, the title intent and existing licensed media. Correct ALL listed unsupported claims everywhere including tables and FAQ; delete unsupported specifics rather than inventing facts. Write ${lang === "ja" ? "all prose in natural Japanese" : "all prose in English"}. Use a recognized ## ${lang === "ja" ? "要点" : "Quick Answer"} section; English answer must be 40-80 words. Keep 3-5 FAQ Q/A pairs, three question headings, Last updated date and at least two DISTINCT EXACT supplied research URLs as Markdown links. Do not invent URLs or append raw Sources names without links. Return the COMPLETE article JSON {title,meta_description,tags:[],content_md,primary_keyword,secondary_keywords:[],format}.`,
+      patchMode ? `You are a senior correction editor performing exact local text corrections only. Use the supervisor assignment and supplied evidence as data. Remove or correct every listed unsupported statement in ALL occurrences including tables and FAQ. Preserve all unrelated prose, headings, photographs, credits, and facts. Never add a fact or URL absent from the evidence. Return JSON {replacements:[{find:"EXACT contiguous original passage of at least 6 characters",replace:"corrected passage or empty string"}]}. Do not return a full article. Every find must match the supplied article exactly. For a shortened phrase, keep grammar intact. If the same phrase occurs more than once, all occurrences will be replaced. Keep the existing English Quick Answer at 40-80 words and preserve FAQ and section structure.` : `${SEO_RULES}\nYou are a senior correction editor executing the supervisor's specific assignment. Preserve verified claims, the title intent and existing licensed media. Correct ALL listed unsupported claims everywhere including tables and FAQ; delete unsupported specifics rather than inventing facts. Write ${lang === "ja" ? "all prose in natural Japanese" : "all prose in English"}. Use a recognized ## ${lang === "ja" ? "要点" : "Quick Answer"} section; English answer must be 40-80 words. Keep 3-5 FAQ Q/A pairs, three question headings, Last updated date and at least two DISTINCT EXACT supplied research URLs as Markdown links. Do not invent URLs or append raw Sources names without links. Return the COMPLETE article JSON {title,meta_description,tags:[],content_md,primary_keyword,secondary_keywords:[],format}.`,
       {
         language: lang,
         article: compactArticle(original),
@@ -379,11 +393,16 @@ export async function editUnderSupervision(
         ],
         today: new Date().toISOString().slice(0, 10),
       },
-      7000,
+      patchMode ? 3000 : 7000,
       undefined,
       payload.final_repair_attempted ? reviewModel(env) : editorModel(env),
     );
-    if (!validateArticle(result.data))
+    let corrected=result.data;
+    if(patchMode){
+      try{corrected=applyEditorialPatch(original,result.data.replacements);}
+      catch(error){payload.editor_patch_fallback={...(payload.editor_patch_fallback || {}),[`${decision.run_id}/${lang}`]:true};throw error;}
+    }
+    if (!validateArticle(corrected))
       throw new HttpError(
         502,
         "보완 에이전트의 글 형식을 확인하지 못했습니다.",
@@ -391,7 +410,7 @@ export async function editUnderSupervision(
     payload.input.translations[lang] = prepareForReview(
       {
         ...original,
-        ...result.data,
+        ...corrected,
         images: original.images,
         source_notes: original.source_notes,
       },
