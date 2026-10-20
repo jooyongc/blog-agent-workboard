@@ -17,6 +17,10 @@ export type Env = {
   AI_REVIEW_MODEL?: string;
   MEDIA_GENERATION_REVISION?: number;
   MEDIA_RECOVERY_REASONS?: string[];
+  MEDIA_MANUAL_ONLY?:boolean;
+  MEDIA_EXCLUDED_IDS?:string[];
+  MEDIA_EDITORIAL_BRIEF?: import("./media-brief").MediaBrief;
+  MEDIA_IMAGE_SLOT?:number;
   MEDIA_REPAIR?: {slot:number; reasons:string[]};
   AI_OUTPUT_BOOST?: number;
   AI_PROVIDER?: string;

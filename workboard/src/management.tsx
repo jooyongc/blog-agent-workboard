@@ -1126,14 +1126,16 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
   const [check, setCheck] = useState("");
+  const [lastSynced,setLastSynced]=useState<Date|null>(null);
   const load = useCallback(
     () =>
       api(`automation?site_id=${active.site_id}`)
         .then((result) => {
           setData(result);
+          setLastSynced(new Date());
           setError("");
         })
-        .catch((e) => setError(e.message)),
+        .catch((e) => setError(`상태 갱신이 일시 지연됐습니다. 아래는 마지막 확인 결과이며 자동으로 다시 조회합니다. ${e.message}`)),
     [active.site_id],
   );
   useEffect(() => {
@@ -1148,6 +1150,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
         note="아이디어만 승인하세요. 역할별 에이전트가 작업을 이어서 임시 발행까지 완료합니다."
       />
       {note(error)}
+      {lastSynced && <p className="flow-description">마지막 상태 확인: {lastSynced.toLocaleTimeString("ko-KR",{timeZone:"Asia/Seoul"})} KST · 6초마다 자동 갱신</p>}
       {data?.control_room && <section className="studio-panel form-body" aria-label="전체 채널 관제">
         <h2>전체 채널 관제</h2>
         <p>한 글이 대기해도 다른 채널은 계속 처리합니다. 자동 복구 경로와 사람이 필요한 항목을 함께 확인하세요.</p>
@@ -1280,6 +1283,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
               try {
                 savedArticles = JSON.parse(j.article_json || "{}");
               } catch {}
+              const imageDirection=Object.values(savedArticles).find((a:any)=>a.image_direction)?.image_direction;
               const savedPhotos = Object.values(savedArticles)
                 .flatMap((article) => article.images || [])
                 .filter(
@@ -1293,6 +1297,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                     `${active.site_id}-${j.slug}-gemini-image-`,
                   ),
               );
+              const excludedPhotoIds:string[]=workflow?.media_excluded_ids_json ? JSON.parse(workflow.media_excluded_ids_json) : [];
               const previewPhotos = [
                 ...new Map<string, any>(
                   [...savedPhotos, ...generatedPhotos].map((photo) => [
@@ -1300,7 +1305,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                     photo,
                   ]),
                 ).values(),
-              ];
+              ].filter(photo=>!excludedPhotoIds.includes(photo.id));
               return (
                 <article key={j.id}>
                   <span
@@ -1328,6 +1333,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                     )[j.status] ?? j.status}
                   </span>
                   <h3>{j.title}</h3>
+                  {imageDirection && <details><summary>본문 기준 이미지 디렉션</summary><p>시간대: {imageDirection.time_of_day}</p><ol>{imageDirection.scenes.map((scene:string,index:number)=><li key={index}>사진 {index+1}: {scene}</li>)}</ol></details>}
                   {j.status === "media_wait" && <p role="status">사진 {previewPhotos.length}/{Math.max(2,Math.min(4,active.strategy.required_images))}장 승인 · 추가 원본 {Math.max(0,Math.max(2,Math.min(4,active.strategy.required_images))-previewPhotos.length)}장 필요</p>}
                   {previewPhotos.length > 0 && (
                     <div className="grid grid-cols-2 gap-3">
@@ -1507,6 +1513,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                   {data?.workflows?.some((f:any)=>f.job_id===j.id&&f.media_recovery_json&&["retrying","repairing"].includes(JSON.parse(f.media_recovery_json).state)) && <p role="status">이미지 자동 복구 중: 등록된 라이선스 자료를 다시 찾고, 필요하면 반려 원본의 문제 부분을 편집해 재검토합니다. 승인된 이미지는 유지합니다.</p>}
                   {j.status === "media_wait" && (
                     <p>
+                      {workflow?.media_manual_hold ? "사용자가 지정한 이미지 교체 대기입니다. 현재 사진을 자동으로 재생성하지 않습니다. " : ""}
                       출처 조사·글과 승인된 사진은 저장돼 있습니다. 자동 보완까지 사용한 경우 추가 생성은 멈춥니다. 워크스페이스의 미디어 등록에서 주제에 맞는 라이선스 원본을 추가하면 사진 선정부터 이어집니다. 창을 열어 두거나 글을 다시 작성할 필요가 없습니다.
                       <Link className="button-secondary" to="/workspaces#media-library">부족한 이미지 원본 등록</Link>
                     </p>

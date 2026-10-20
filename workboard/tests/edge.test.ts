@@ -1,3 +1,6 @@
+import {illustrate} from "../server/media";
+import {mediaBrief,imageRequestId} from "../server/media-brief";
+import {normalizeMarkdownSpacing} from "../shared/markdown-spacing";
 import {nextWake,recoveryAction,controlRoom} from "../server/control-room";
 import {editUnderSupervision,applyEditorialPatch,supervise} from "../server/supervisor";
 import {expireLeases,classifyMessage,planAutoRetry,AUTO_RETRY_LIMIT} from "../server/harness";
@@ -1833,14 +1836,15 @@ test("temporary original image fetch failure is retryable before making a paid r
 test("photo workflow recovers confirmed rejection once then waits for originals without paid loops",async()=>{
  const {env,d}=environment();Object.assign(env,{AI_PROVIDER:"gemini",GEMINI_API_KEY:"test",GEMINI_IMAGES_ENABLED:"true",NATIVE_BLOG_SUPABASE_KEY:"test",MEDIA_POLICY:"adobe-generated"});
  const {w,input}=supervisorFixture();input.translations.en.images=[];input.translations.en.primary_keyword="unique-media-recovery";
+ const brief=await mediaBrief(input.translations.en,w);
  const slug="bounded-photo-recovery",payload={slug,title:input.translations.en.title,input};
  d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('bounded-photo',?,?,?,'culture','{}','agent_pending','now','now')").run(w.site_id,slug,payload.title);
  d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES('bounded-photo','bounded-topic',?,'photo_editor','pending',?,'now','now')").run(w.site_id,JSON.stringify(payload));
  const insert=d.sqlite.prepare("INSERT INTO creative_requests(id,site_id,kind,prompt,status,result_json,created_at,updated_at) VALUES(?,?,?,'old','complete',?,'now','now')");
  for(const rev of [3,4])for(const variant of [0,1]){
-  const id=w.site_id+'-'+slug+'-gemini-image-v'+rev+'-0-'+variant;const review={approved:false,reason:"가짜 문자와 손가락 왜곡",policy:"korea-topic-photographic-v3"};
+  const id=imageRequestId(w.site_id,slug,rev,0,variant,brief);const review={approved:false,reason:"가짜 문자와 손가락 왜곡",policy:"korea-topic-photographic-v3"};
   const photo={id,url:"https://agkkvtfwqmzgbrqhvohs.supabase.co/storage/v1/object/public/workboard-media/gemini/test.jpg",alt:"Seoul Korea",provider:"Gemini",visual_review:review};
-  insert.run(id,w.site_id,"image",JSON.stringify(photo));insert.run(w.site_id+'-'+slug+'-visual-v3-'+id,w.site_id,"visual_review",JSON.stringify(review));
+  insert.run(id,w.site_id,"image",JSON.stringify(photo));insert.run(w.site_id+'-'+slug+'-visual-v3-'+id+'-b'+brief.key.slice(0,16)+'-s0',w.site_id,"visual_review",JSON.stringify(review));
  }
  const before=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw Error("No duplicate paid calls");};
  try{
@@ -1850,9 +1854,9 @@ test("photo workflow recovers confirmed rejection once then waits for originals 
   const assigned=d.sqlite.prepare("SELECT payload_json FROM agent_workflows WHERE job_id='bounded-photo'").get() as any;
   assert.equal(JSON.parse(assigned.payload_json).media_repair.slot,0);
   // The final strategy also has a receipt. Once rejected it must wait, never submit again.
-  const repaired=w.site_id+'-'+slug+'-gemini-image-v5-0-0';
+  const repaired=imageRequestId(w.site_id,slug,5,0,0,brief);
   const rejectedPhoto={id:repaired,url:"https://agkkvtfwqmzgbrqhvohs.supabase.co/storage/v1/object/public/workboard-media/gemini/repair.jpg",alt:"Seoul Korea",provider:"Gemini",visual_review:{approved:false,reason:"still distorted",policy:"korea-topic-photographic-v3"}};
-  insert.run(repaired,w.site_id,"image",JSON.stringify(rejectedPhoto));insert.run(w.site_id+'-'+slug+'-visual-v3-'+repaired,w.site_id,"visual_review",JSON.stringify(rejectedPhoto.visual_review));
+  insert.run(repaired,w.site_id,"image",JSON.stringify(rejectedPhoto));insert.run(w.site_id+'-'+slug+'-visual-v3-'+repaired+'-b'+brief.key.slice(0,16)+'-s0',w.site_id,"visual_review",JSON.stringify(rejectedPhoto.visual_review));
   const third=await advanceHarness(env) as any;assert.equal(third.media_wait,true);
   row=d.sqlite.prepare("SELECT status,payload_json FROM agent_workflows WHERE job_id='bounded-photo'").get() as any;assert.equal(row.status,"media_wait");assert.equal(JSON.parse(row.payload_json).media_recovery.state,"needs_resource");assert.ok(JSON.parse(row.payload_json).input);assert.equal(calls,0);
  }finally{globalThis.fetch=before;}
@@ -2224,4 +2228,40 @@ test("new shared licensed stock wakes an untouched media wait once, with the ori
  d.sqlite.prepare("UPDATE agent_workflows SET status='media_wait' WHERE job_id='library-wait'").run();
  await recoverWorkflows(env);state=d.sqlite.prepare("SELECT status FROM agent_workflows WHERE job_id='library-wait'").get() as any;
  assert.equal(state.status,"media_wait");
+});
+
+
+test("night walk media direction uses the article purpose and distinct practical rest stops",async()=>{
+ const {w,input}=supervisorFixture();const a={...input.translations.en,title:"Seoul Evening Walk Rest Spots: Where Can You Sit Down After Dark?",content_md:"## Quick Answer\nRest during an evening walk.\n## Which parks can you visit?\nAn illuminated modern Han River path.\n## Can I rest at a convenience store?\nA ramyeon cooking station and a table.\n## Where are cafes?\nA warm stop near the walking route."};
+ const b=await mediaBrief(a,w);assert.equal(b.time_of_day,"evening / after sunset");assert.ok(b.article_excerpt.includes("ramyeon cooking station"));assert.ok(b.scenes[0].includes("urban park"));assert.ok(b.scenes[1].includes("convenience-store"));assert.notEqual(b.scenes[0],b.scenes[1]);
+ const recovery=recoveryScene(a.title,["fake signs"],true);assert.equal(recovery.includes("tiled roofs"),false);assert.ok(recovery.includes("article brief"));
+ const changed=await mediaBrief({...a,content_md:"A museum exhibition guide"},w);assert.notEqual(b.key,changed.key);
+});
+
+test("title-only visual approval is not reused for a new article brief and slot",async()=>{
+ const {env}=environment();env.GEMINI_API_KEY="test";env.AI_PROVIDER="gemini";
+ const {w,input}=supervisorFixture();env.MEDIA_EDITORIAL_BRIEF=await mediaBrief({...input.translations.en,title:"Seoul evening walk rest spots",content_md:"A modern night riverside park walk and convenience-store ramyeon stop"},w);env.MEDIA_IMAGE_SLOT=1;
+ const photo:any={id:"old-image",provider:"Gemini",url:env.NATIVE_BLOG_SUPABASE_URL+"/storage/v1/object/public/workboard-media/gemini/old.jpg",alt:"Seoul rest",visual_review:{approved:true,policy:"korea-topic-photographic-v3",run_id:"old-title-only"}};
+ const before=globalThis.fetch;let reviews=0;
+ globalThis.fetch=async(url,init)=>{if(String(url).includes("generateContent")){reviews++;const request=JSON.parse(String(init?.body));const data=JSON.parse(request.contents[0].parts[0].text);assert.ok(data.editorial_brief.article_excerpt.includes("ramyeon"));assert.ok(data.slot_goal.includes("convenience-store"));return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify({approved:false,reason:"Wrong old-alley portrait, not a practical night rest stop"})}]}}],usageMetadata:{promptTokenCount:100,candidatesTokenCount:30}});}return new Response(new Uint8Array([137,80,78,71]),{headers:{"Content-Type":"image/png"}});};
+ try{const result=await reviewPhoto(env,w.site_id,"context-test","Seoul evening walk",photo);assert.equal(reviews,1);assert.equal(result.visual_review?.approved,false);assert.equal(result.visual_review?.brief_key,env.MEDIA_EDITORIAL_BRIEF.key);assert.equal(result.visual_review?.slot,1);}finally{globalThis.fetch=before;}
+});
+
+test("review preparation is idempotent around photos and preserves fenced-code spacing",()=>{
+ const {w,input,research}=supervisorFixture();let a=input.translations.en;
+ a.content_md=a.content_md.replace(/\n\n/g,"\n\n\n\n");
+ a=prepareForReview(a,research.briefs.en,"en");const first=a.content_md;
+ for(let i=0;i<5;i++)a=prepareForReview(a,research.briefs.en,"en");
+ assert.equal(a.content_md,first);assert.equal(/\n{3,}/.test(a.content_md),false);
+ assert.deepEqual(a.images,input.translations.en.images);assert.equal(quality(a,w,"en").passed,true);
+ const code="before\n\n\n```txt\none\n\n\ntwo\n```\n\n\nafter";
+ assert.ok(normalizeMarkdownSpacing(code).includes("one\n\n\ntwo"));assert.ok(normalizeMarkdownSpacing(code).endsWith("```\n\nafter"));
+});
+
+
+test("manual image replacement hold preserves original content and makes no paid generation request",async()=>{
+ const {env}=environment();Object.assign(env,{MEDIA_MANUAL_ONLY:true,GEMINI_IMAGES_ENABLED:"true",GEMINI_API_KEY:"test",NATIVE_BLOG_SUPABASE_KEY:"test"});
+ const {w,input}=supervisorFixture();const a=input.translations.en;a.primary_keyword="unique-manual-context-replacement";a.images=[];const beforeText=a.content_md;
+ const before=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw Error("No paid request during manual replacement");};
+ try{await assert.rejects(()=>illustrate(env,w,"manual-context",{en:a}),/사용자 지정 이미지 교체 대기/);assert.equal(calls,0);assert.equal(a.content_md,beforeText);}finally{globalThis.fetch=before;}
 });

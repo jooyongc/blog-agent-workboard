@@ -266,11 +266,11 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
         if(candidates.some(p=>!seen.has(p.id))){payload.media_library_checked=candidates.map(p=>p.id);resume=true;}
       }
     }
-    if(task.status==="media_wait" && stage==="photo_editor" && payload.photo_retry_revision && payload.media_recovery?.reasons?.length){
+    if(task.status==="media_wait" && stage==="photo_editor" && !payload.media_manual_hold && payload.photo_retry_revision && payload.media_recovery?.reasons?.length){
       const job=await env.WORKBOARD_DB.prepare("SELECT request_json FROM content_jobs WHERE id=?").bind(task.job_id).first<{request_json:string}>();
       if(job?.request_json===JSON.stringify(payload.input)){
         // Stored recovery reasons may predate the latest failed slot; read actual rejected receipts.
-        const last=await env.WORKBOARD_DB.prepare("SELECT id,result_json FROM creative_requests WHERE site_id=? AND kind='image' AND status='complete' AND substr(id,1,length(?))=? AND json_extract(result_json,'$.visual_review.approved')=0 ORDER BY created_at DESC LIMIT 1").bind(task.site_id,`${task.site_id}-${payload.slug}-gemini-image-v4-`,`${task.site_id}-${payload.slug}-gemini-image-v4-`).first<{id:string;result_json:string}>();
+        const last=await env.WORKBOARD_DB.prepare("SELECT id,result_json FROM creative_requests WHERE site_id=? AND kind='image' AND status='complete' AND substr(id,1,length(?))=? AND instr(id,'-v4-')>0 AND json_extract(result_json,'$.visual_review.approved')=0 ORDER BY created_at DESC LIMIT 1").bind(task.site_id,`${task.site_id}-${payload.slug}-gemini-image-`,`${task.site_id}-${payload.slug}-gemini-image-`).first<{id:string;result_json:string}>();
         if(last){const slot=Number(last.id.match(/-v4-(\d+)-\d+$/)?.[1]);const photo=JSON.parse(last.result_json);
           if(Number.isInteger(slot) && planMediaRepair(payload,new ImageCandidatesRejected(slot,[photo.visual_review.reason]),await chargeSettled(env,task.site_id,payload.slug,null)))resume=true;
         }
@@ -627,7 +627,7 @@ export async function advanceHarness(env: Env) {
   env = await applyModelSettings(env);
   const payload = JSON.parse(task.payload_json),
     w = await workspace(env, task.site_id);
-  env = {...env, MEDIA_GENERATION_REVISION: payload.photo_retry_revision || 3, MEDIA_RECOVERY_REASONS:payload.media_recovery?.reasons || [], MEDIA_REPAIR:payload.media_repair, AI_OUTPUT_BOOST: outputBoost(payload, task.stage)};
+  env = {...env, MEDIA_GENERATION_REVISION: payload.photo_retry_revision || 3, MEDIA_RECOVERY_REASONS:payload.media_recovery?.reasons || [], MEDIA_REPAIR:payload.media_repair, MEDIA_MANUAL_ONLY:payload.media_manual_hold, MEDIA_EXCLUDED_IDS:payload.media_excluded_ids, AI_OUTPUT_BOOST: outputBoost(payload, task.stage)};
   await env.WORKBOARD_DB.prepare(
     "UPDATE content_jobs SET status=?,error=NULL,updated_at=? WHERE id=?",
   )
@@ -681,6 +681,7 @@ export async function advanceHarness(env: Env) {
       if (
         w.languages.some(
           (l) =>
+            payload.media_manual_hold ||
             (env.MEDIA_POLICY === "adobe-generated" &&
               !approvedMedia(payload.input.translations[l])) ||
             (payload.input.translations[l].images?.length || 0) <
@@ -693,6 +694,7 @@ export async function advanceHarness(env: Env) {
           payload.slug,
           payload.input.translations,
         );
+      delete payload.media_manual_hold;
       if(payload.media_recovery)payload.media_recovery={...payload.media_recovery,state:"complete",finished_at:new Date().toISOString()};
       if(payload.media_repair)payload.media_repair={...payload.media_repair,state:"complete"};
       if(payload.supervision?.length)repairNext="supervisor";

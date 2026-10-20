@@ -1,3 +1,5 @@
+import {mediaBrief} from "./media-brief";
+import {normalizeMarkdownSpacing} from "../shared/markdown-spacing";
 import type { Env } from "./env";
 import type { Workspace, Article } from "../shared/types";
 import {
@@ -25,6 +27,8 @@ export type StockPhoto = {
     run_id: string;
     sha256: string;
     policy?: string;
+    brief_key?: string;
+    slot?: number;
   };
 };
 export function koreanMedia(description: string) {
@@ -48,6 +52,7 @@ export function approvedMedia(article: Article) {
         koreanMedia(p.alt) &&
         !!p.license_url &&
         p.visual_review?.approved === true && p.visual_review.policy === VISUAL_POLICY &&
+        (!article.image_brief_key || p.visual_review.brief_key === article.image_brief_key) &&
         /^[a-f0-9]{64}$/.test(p.visual_review.sha256) &&
         article.content_md.includes(p.url),
     ) &&
@@ -174,7 +179,7 @@ export function insertStockPhotos(
     blocks[target] +=
       `\n\n![${clean(photo.alt)}](${photo.url})\n\n${["Adobe Firefly", "Gemini"].includes(photo.provider) ? `*AI-generated illustration (${photo.provider}). Not documentary evidence.*` : `*Photo: [${clean(photo.photographer)} / ${photo.provider}](${photo.page}). Context illustration.*`}\n\n`;
   });
-  return { ...article, content_md: blocks.join(""), images: selected };
+  return { ...article, content_md: normalizeMarkdownSpacing(blocks.join("")), images: selected };
 }
 export async function illustrate(
   env: Env,
@@ -207,17 +212,19 @@ export async function illustrate(
     );
   }
   const first = result[w.languages[0]];
+  const brief=await mediaBrief(first,w);
+  env={...env,MEDIA_EDITORIAL_BRIEF:brief};
   const query = first.primary_keyword || first.title;
   const count = Math.max(2, Math.min(4, w.strategy.required_images));
-  const candidates = await stockPhotos(env, query, 0, w.site_id);
+  const candidates = (await stockPhotos(env, query, 0, w.site_id)).filter(p=>!env.MEDIA_EXCLUDED_IDS?.includes(p.id));
   const photos: StockPhoto[] = [];
-  const prefix=`${w.site_id}-${slug}-gemini-image-v`;
+  const prefix=`${w.site_id}-${slug}-gemini-image-`;
   const saved=await env.WORKBOARD_DB.prepare("SELECT result_json FROM creative_requests WHERE site_id=? AND kind='image' AND status='complete' AND substr(id,1,length(?))=? AND json_extract(result_json,'$.visual_review.approved')=1 AND json_extract(result_json,'$.visual_review.policy')=? ORDER BY created_at").bind(w.site_id,prefix,prefix,VISUAL_POLICY).all<{result_json:string}>();
-  for(const row of saved.results){const photo:StockPhoto=JSON.parse(row.result_json);if(koreanMedia(photo.alt)&&!photos.some(p=>p.url===photo.url)&&photos.length<count)photos.push(photo);}
+  for(const row of saved.results){const photo:StockPhoto=JSON.parse(row.result_json);if(!env.MEDIA_EXCLUDED_IDS?.includes(photo.id) && photo.visual_review?.brief_key===brief.key && koreanMedia(photo.alt)&&!photos.some(p=>p.url===photo.url)&&photos.length<count)photos.push(photo);}
   for (const candidate of candidates) {
     if(photos.length>=count)break;
     const checked = await reviewPhoto(
-      env,
+      {...env,MEDIA_IMAGE_SLOT:photos.length},
       w.site_id,
       slug,
       first.title,
@@ -231,6 +238,7 @@ export async function illustrate(
     if (photos.length >= count) break;
   }
   for (let i = photos.length; i < count; i++) {
+    if(env.MEDIA_MANUAL_ONLY)throw new HttpError(409,"MEDIA_REVIEW: 사용자 지정 이미지 교체 대기입니다. 글과 검증 기록은 보존하며, 적합한 원본을 등록하면 이어서 검토합니다.");
     if (generatedImagesReady(env)) {
       const {fresh,...photo}=await generatedPhoto(env, w.site_id, slug, first.title, i);
       photos.push(photo);
@@ -284,6 +292,8 @@ export async function illustrate(
         .join("\n");
     }
     article.images = [];
+    article.image_brief_key=brief.key;
+    article.image_direction={time_of_day:brief.time_of_day,scenes:brief.scenes};
   }
   for (const lang of w.languages)
     result[lang] = insertStockPhotos(result[lang], photos);

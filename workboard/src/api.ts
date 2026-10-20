@@ -16,9 +16,9 @@ export async function api<T>(
     credentials: "same-origin",
     signal: options.signal ?? AbortSignal.timeout(150000),
   });
-  const data = await res
-    .json()
-    .catch(() => ({ error: "서버 응답을 확인하지 못했습니다." }));
+  const data = await res.json().catch(() => {
+    throw new ApiError(res.status,"서버가 올바른 JSON 상태 응답을 반환하지 않았습니다.");
+  });
   if (!res.ok)
     throw new ApiError(
       res.status,

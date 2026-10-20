@@ -77,6 +77,8 @@ export type Post = {
 };
 export type PostsResult = { posts: Post[]; warning?: string; error?: string };
 export type Article = {
+  image_brief_key?:string;
+  image_direction?: {time_of_day:string;scenes:string[]};
   videos?: {
     id: string;
     provider: string;
@@ -101,6 +103,8 @@ export type Article = {
       run_id: string;
       sha256: string;
       policy?: string;
+      brief_key?: string;
+      slot?: number;
     };
   }[];
   title: string;
