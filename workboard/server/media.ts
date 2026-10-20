@@ -1,4 +1,4 @@
-import {mediaBrief} from "./media-brief";
+import {mediaBrief,mediaSearchQuery} from "./media-brief";
 import {normalizeMarkdownSpacing} from "../shared/markdown-spacing";
 import type { Env } from "./env";
 import type { Workspace, Article } from "../shared/types";
@@ -65,6 +65,8 @@ export async function stockPhotos(
   count = 2,
   siteId?: string,
 ): Promise<StockPhoto[]> {
+  const folded=(text:string)=>text.normalize("NFD").replace(/\p{M}/gu,"").toLowerCase();
+  const search=folded(query);
   const uploaded = siteId
     ? (
         await env.WORKBOARD_DB.prepare(
@@ -87,7 +89,7 @@ export async function stockPhotos(
         )
         .filter((x) =>
           JSON.parse(x.tags_json).some((tag: string) =>
-            query.toLowerCase().includes(tag),
+            search.includes(folded(tag)),
           ),
         )
         .map((x) => ({
@@ -107,7 +109,7 @@ export async function stockPhotos(
         x.type === "photo" &&
         ["purchased", "just_purchased"].includes(x.license_state) &&
         koreanMedia(x.alt) &&
-        x.tags.some((tag) => query.toLowerCase().includes(tag)),
+        x.tags.some((tag) => search.includes(folded(tag))),
     )
     .map((x) => ({
       id: x.id,
@@ -131,7 +133,7 @@ export function licensedVideos(query: string) {
   return library.filter(
     (x) =>
       x.type === "video" &&
-      x.tags.some((tag) => query.toLowerCase().includes(tag)),
+      x.tags.some((tag) => search.includes(folded(tag))),
   );
 }
 export function insertStockPhotos(
@@ -214,7 +216,7 @@ export async function illustrate(
   const first = result[w.languages[0]];
   const brief=await mediaBrief(first,w);
   env={...env,MEDIA_EDITORIAL_BRIEF:brief};
-  const query = first.primary_keyword || first.title;
+  const query = mediaSearchQuery(first);
   const count = Math.max(2, Math.min(4, w.strategy.required_images));
   const candidates = (await stockPhotos(env, query, 0, w.site_id)).filter(p=>!env.MEDIA_EXCLUDED_IDS?.includes(p.id));
   const photos: StockPhoto[] = [];
@@ -313,7 +315,7 @@ export async function illustrate(
   ).results
     .filter((x) =>
       JSON.parse(x.tags_json).some((tag: string) =>
-        query.toLowerCase().includes(tag),
+        search.includes(folded(tag)),
       ),
     )
     .map((x) => ({

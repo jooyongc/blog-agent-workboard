@@ -1,3 +1,4 @@
+import {mediaSearchQuery} from "./media-brief";
 import {nextWake} from "./control-room";
 import {planMediaRecovery,recordMediaResourceWait,planMediaRepair,ImageCandidatesRejected} from "./media-recovery";
 import {applyModelSettings} from "./model-settings";
@@ -261,7 +262,7 @@ export async function recoverWorkflows(env: Env, now = Date.now()) {
       const job=await env.WORKBOARD_DB.prepare("SELECT request_json FROM content_jobs WHERE id=?").bind(task.job_id).first<{request_json:string}>();
       if(job?.request_json===JSON.stringify(payload.input) && await chargeSettled(env,task.site_id,payload.slug,null)){
         const first=Object.values(payload.input.translations)[0] as any;
-        const candidates=await stockPhotos(env,first.primary_keyword || first.title,0,task.site_id);
+        const candidates=await stockPhotos(env,mediaSearchQuery(first),0,task.site_id);
         const seen=new Set(payload.media_library_checked || []);
         if(candidates.some(p=>!seen.has(p.id))){payload.media_library_checked=candidates.map(p=>p.id);resume=true;}
       }

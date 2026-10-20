@@ -1,5 +1,5 @@
 import {illustrate} from "../server/media";
-import {mediaBrief,imageRequestId} from "../server/media-brief";
+import {mediaBrief,imageRequestId,mediaSearchQuery} from "../server/media-brief";
 import {normalizeMarkdownSpacing} from "../shared/markdown-spacing";
 import {nextWake,recoveryAction,controlRoom} from "../server/control-room";
 import {editUnderSupervision,applyEditorialPatch,supervise} from "../server/supervisor";
@@ -2264,4 +2264,11 @@ test("manual image replacement hold preserves original content and makes no paid
  const {w,input}=supervisorFixture();const a=input.translations.en;a.primary_keyword="unique-manual-context-replacement";a.images=[];const beforeText=a.content_md;
  const before=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw Error("No paid request during manual replacement");};
  try{await assert.rejects(()=>illustrate(env,w,"manual-context",{en:a}),/사용자 지정 이미지 교체 대기/);assert.equal(calls,0);assert.equal(a.content_md,beforeText);}finally{globalThis.fetch=before;}
+});
+
+
+test("replacement lookup includes article sections and matches cafe tags despite accent differences",async()=>{
+ const {env,d}=environment();const {input}=supervisorFixture();const a={...input.translations.en,title:"Evening walk rest stops",primary_keyword:"Seoul evening walk",content_md:"## Where do cafés fit in?\nA warm stop."};
+ d.sqlite.prepare(`INSERT INTO reusable_media(id,site_id,provider,kind,title,tags_json,url,source_url,license_reference,created_at) VALUES('context-cafe','koreadecode','Adobe Stock','photo','Seoul cafe in South Korea','["cafe"]','https://example.com/photo.jpg','https://stock.adobe.com/images/1','licensed owner asset','now')`).run();
+ const photos=await stockPhotos(env,mediaSearchQuery(a),0,"koreabylocal");assert.ok(photos.some(p=>p.id==="context-cafe"));
 });

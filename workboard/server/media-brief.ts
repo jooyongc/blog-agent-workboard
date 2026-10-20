@@ -20,3 +20,5 @@ export async function mediaBrief(article:Article,w:Workspace):Promise<MediaBrief
 }
 export function briefScene(brief:MediaBrief,slot:number){return brief.scenes[slot%brief.scenes.length];}
 export function imageRequestId(site:string,slug:string,revision:number,slot:number,variant:number,brief?:MediaBrief){return `${site}-${slug}-gemini-image-${brief?"b"+brief.key.slice(0,16)+"-":""}v${revision}-${slot}-${variant}`;}
+
+export function mediaSearchQuery(article:Article){return [article.primary_keyword || "",article.title,...[...article.content_md.matchAll(/^## (.+)$/gm)].map(m=>m[1])].join(" ");}
