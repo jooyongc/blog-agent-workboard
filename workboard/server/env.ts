@@ -23,6 +23,8 @@ export type Env = {
   MEDIA_IMAGE_SLOT?:number;
   MEDIA_REPAIR?: {slot:number; reasons:string[]};
   MEDIA_ROUND?: number;
+  MEDIA_SETTINGS?: import("../shared/media-policy").MediaSettings;
+  AI_ANTHROPIC_EFFORT?: string;
   AI_OUTPUT_BOOST?: number;
   AI_PROVIDER?: string;
   AI_ENABLED?: string;

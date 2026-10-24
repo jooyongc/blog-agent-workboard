@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { VISUAL_POLICY, OPERATOR_MEDIA_ROUNDS } from "../shared/media-policy";
+import { VISUAL_POLICY, OPERATOR_MEDIA_ROUNDS, MEDIA_SOURCE_PRESETS, IMAGE_MODEL_CHOICES } from "../shared/media-policy";
 import { modelLabel } from "../shared/model-label";
 import { api } from "./api";
 import type { Workspace } from "../shared/types";
@@ -1169,17 +1169,16 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
         </span>
       </section>
       <p className="flow-description">
-        이미지 정책: 한국 배경·주제에 맞는 Adobe Stock 또는 직접 생성 이미지 ·
-        Gemini 자동 생성:{" "}
-        {data?.media?.gemini_images ? "연결됨 · Pro 이미지 검토" : "연결 대기"}{" "}
-        · Firefly: {data?.media?.firefly ? "연결됨" : "API 이용 권한 연결 대기"}{" "}
-        · 부적합한 이미지가 있으면 발행을 멈춥니다.
+        이미지 정책: 등록된 Adobe 원본 →{" "}
+        {MEDIA_SOURCE_PRESETS.find((p) => p.id === data?.media?.settings?.sources?.join(","))?.label ?? "확인 중"}{" "}
+        · 생성 모델: {data?.media?.gemini_images ? (IMAGE_MODEL_CHOICES as any)[data?.media?.settings?.image_model]?.label ?? "확인 중" : "연결 대기"}{" "}
+        · 모든 사진은 {modelLabel(data?.orchestration?.supervisor_model)}이 픽셀 검토 · 부적합한 이미지가 있으면 발행을 멈춥니다.
       </p>
       <div className="workflow-guide">
         {[
           "공식 출처 조사",
           "독자별 집필",
-          "주제별 Adobe 이미지 선정",
+          "Claude 사진 검색·연출 → 픽셀 검토",
           "SEO·AEO·GEO 검증",
           "상위 검토 · " + modelLabel(data?.orchestration?.supervisor_model),
           "필요 시 보완 → 재검증",
@@ -1353,7 +1352,9 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                           <figcaption>
                             {photo.provider === "Adobe Stock"
                               ? "Adobe Stock 원본"
-                              : "AI 삽화"}{" "}
+                              : photo.provider === "Wikimedia Commons"
+                                ? `Wikimedia Commons 사진 · ${photo.license || "CC"}`
+                                : "AI 삽화"}{" "}
                             · {modelLabel(photo.visual_review?.model || data?.orchestration?.supervisor_model)} 검토 완료
                           </figcaption>
                         </figure>
@@ -1640,6 +1641,8 @@ export function Connections({
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
   const [models,setModels]=useState<any>(null),[modelBusy,setModelBusy]=useState(false),[modelMessage,setModelMessage]=useState("");
+  const [mediaBusy,setMediaBusy]=useState(false),[mediaMessage,setMediaMessage]=useState("");
+  const setMedia=(change:any)=>setModels({...models,media:{...models.media,...change}});
   useEffect(()=>{void api("ai-models").then(setModels).catch(e=>setError(e.message));},[]);
   const [measurement, setMeasurement] = useState<any>(null);
   const [measuring, setMeasuring] = useState(false);
@@ -1677,10 +1680,30 @@ export function Connections({
               </optgroup>)}
             </select>
           </label>)}
-          <p>이미지 생성은 Gemini 3.1 Flash Image를 사용합니다. Claude 선택은 이미지 생성기를 변경하지 않습니다. 선택한 모델의 비용은 기존 사이트별·글별 예산에 포함됩니다.</p>
+          <p>Claude는 이미지를 직접 만들지 않으므로 이미지 생성은 아래 이미지 수급 방식에서 고른 Gemini 이미지 모델이 맡습니다. 선택한 모델의 비용은 기존 사이트별·글별 예산에 포함됩니다.</p>
           {Object.entries(models.providers).map(([provider,state]:any)=><small key={provider}>{provider}: {state.ready?"API 모델 목록 확인 완료":state.error}</small>)}
           <button className="button-primary" disabled={modelBusy} onClick={()=>{setModelBusy(true);setModelMessage("");void api("ai-models",{method:"PUT",body:JSON.stringify(models.selected)}).then(()=>{setModelMessage("저장했습니다. 다음 단계부터 선택한 모델을 사용합니다.");return api("settings").then(setData);}).catch(e=>setError(e.message)).finally(()=>setModelBusy(false));}}>{modelBusy?"확인·저장 중…":"AI 모델 설정 저장"}</button>
           <p role="status">{modelMessage}</p>
+        </>}
+      </section>
+      <section className="studio-panel form-body">
+        <h2>이미지 수급 방식</h2>
+        <p>등록된 Adobe 라이선스 원본을 먼저 확인한 뒤 아래 순서로 빈 사진 자리를 채웁니다. Claude가 사진 자리마다 장면과 검색어를 정하고, 모든 사진은 위에서 고른 상위 검토 모델이 실제 픽셀을 보고 승인합니다.</p>
+        {models?.media && <>
+          <label className="field-label">수급 순서
+            <select value={models.media.sources.join(",")} onChange={e=>setMedia({sources:MEDIA_SOURCE_PRESETS.find(p=>p.id===e.target.value)!.sources})}>
+              {MEDIA_SOURCE_PRESETS.map(p=><option key={p.id} value={p.id}>{p.label}</option>)}
+            </select>
+          </label>
+          <label className="field-label"><span><input type="checkbox" checked={models.media.art_direction} onChange={e=>setMedia({art_direction:e.target.checked})}/>{" "}Claude 장면 연출: 생성 전에 사진 자리마다 간판·글자 없는 구체적 장면을 작성합니다 (자리당 약 $0.01–0.03)</span></label>
+          {(["image_model","corrective_image_model"] as const).map(key=><label className="field-label" key={key}>{key==="image_model"?"첫 생성 모델":"보정·편집 모델 (반려 후)"}
+            <select value={models.media[key]} onChange={e=>setMedia({[key]:e.target.value})}>
+              {models.image_models.map((m:any)=><option key={m.id} value={m.id} disabled={!m.available}>{m.label} · 장당 ${m.per_image}{m.available?"":" · API 사용 확인 필요"}</option>)}
+            </select>
+          </label>)}
+          <p>실제 사진은 Wikimedia Commons에서 CC0·퍼블릭 도메인·CC BY·CC BY-SA 사진만 쓰고, 작가와 라이선스를 캡션에 표시합니다. 사진 자리당 최대 3장만 검토합니다.</p>
+          <button className="button-primary" disabled={mediaBusy} onClick={()=>{setMediaBusy(true);setMediaMessage("");const {sources,art_direction,image_model,corrective_image_model}=models.media;void api("media-settings",{method:"PUT",body:JSON.stringify({sources,art_direction,image_model,corrective_image_model})}).then(()=>setMediaMessage("저장했습니다. 다음 사진 단계부터 이 방식으로 채웁니다.")).catch(e=>setError(e.message)).finally(()=>setMediaBusy(false));}}>{mediaBusy?"확인·저장 중…":"이미지 수급 설정 저장"}</button>
+          <p role="status">{mediaMessage}</p>
         </>}
       </section>
       <div className="integration-grid">

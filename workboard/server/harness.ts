@@ -2,6 +2,7 @@ import {mediaSearchQuery} from "./media-brief";
 import {nextWake} from "./control-room";
 import {planMediaRecovery,recordMediaResourceWait,planMediaRepair,ImageCandidatesRejected} from "./media-recovery";
 import {applyModelSettings} from "./model-settings";
+import {mediaSettings} from "./media-settings";
 import { importLicensedMedia } from "./media-import";
 import type { Env } from "./env";
 import type { DraftInput } from "../shared/types";
@@ -632,7 +633,7 @@ export async function advanceHarness(env: Env) {
   env = await applyModelSettings(env);
   const payload = JSON.parse(task.payload_json),
     w = await workspace(env, task.site_id);
-  env = {...env, MEDIA_GENERATION_REVISION: payload.photo_retry_revision || 3, MEDIA_RECOVERY_REASONS:payload.media_recovery?.reasons || [], MEDIA_REPAIR:payload.media_repair, MEDIA_ROUND:payload.media_round, MEDIA_MANUAL_ONLY:payload.media_manual_hold, MEDIA_EXCLUDED_IDS:payload.media_excluded_ids, AI_OUTPUT_BOOST: outputBoost(payload, task.stage)};
+  env = {...env, MEDIA_SETTINGS: task.stage === "photo_editor" ? await mediaSettings(env) : undefined, MEDIA_GENERATION_REVISION: payload.photo_retry_revision || 3, MEDIA_RECOVERY_REASONS:payload.media_recovery?.reasons || [], MEDIA_REPAIR:payload.media_repair, MEDIA_ROUND:payload.media_round, MEDIA_MANUAL_ONLY:payload.media_manual_hold, MEDIA_EXCLUDED_IDS:payload.media_excluded_ids, AI_OUTPUT_BOOST: outputBoost(payload, task.stage)};
   await env.WORKBOARD_DB.prepare(
     "UPDATE content_jobs SET status=?,error=NULL,updated_at=? WHERE id=?",
   )

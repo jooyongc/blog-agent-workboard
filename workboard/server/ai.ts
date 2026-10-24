@@ -6,6 +6,7 @@ import { validateArticle } from "./content";
 import { modelJson } from "./model";
 import { SEO_RULES, quality } from "./seo";
 import { illustrate } from "./media";
+import { mediaSettings } from "./media-settings";
 export type GenerateInput = {
   site_id: string;
   slug: string;
@@ -127,7 +128,7 @@ export async function generate(input: GenerateInput, env: Env) {
   const illustrated =
     input.attach_images === false
       ? translations
-      : await illustrate(env, { ...w, languages }, input.slug, translations);
+      : await illustrate({ ...env, MEDIA_SETTINGS: env.MEDIA_SETTINGS ?? (await mediaSettings(env)) }, { ...w, languages }, input.slug, translations);
   for (const lang of languages)
     scores[lang] = quality(illustrated[lang], w, lang);
   return { translations: illustrated, quality: scores, cost_usd: cost };

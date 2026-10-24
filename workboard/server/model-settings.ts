@@ -1,6 +1,8 @@
 import type {Env} from "./env";
 import {MODEL_RATES, workerModel, reviewModel, type ModelId} from "./model";
 import {HttpError} from "./http";
+import {mediaSettings} from "./media-settings";
+import {IMAGE_MODEL_CHOICES} from "../shared/media-policy";
 export async function applyModelSettings(env:Env):Promise<Env>{
  const row=await env.WORKBOARD_DB.prepare("SELECT worker,supervisor FROM ai_model_settings WHERE id=1").first<{worker:ModelId;supervisor:ModelId}>();
  return row?{...env,AI_WORKER_MODEL:row.worker,AI_REVIEW_MODEL:row.supervisor,AI_PROVIDER:row.worker.startsWith("gemini-")?"gemini":"anthropic"}:env;
@@ -17,7 +19,8 @@ export async function modelCatalog(env:Env){
   }catch(e){statuses[provider]={ready:false,error:String(e),ids:[]};}
  }));
  const choices=Object.keys(MODEL_RATES).map(id=>{const provider=id.startsWith("gemini-")?"gemini":"anthropic";return {id,provider,available:statuses[provider].ids.some(x=>x===id||x.startsWith(id+"-")),senior:/pro|sonnet|opus/.test(id),rates:MODEL_RATES[id as ModelId]};});
- return {choices,providers:statuses,selected:{worker:workerModel(env),supervisor:reviewModel(env)},scope:"all_workspaces",image_model:"gemini-3.1-flash-image"};
+ const image_models=Object.entries(IMAGE_MODEL_CHOICES).map(([id,m])=>({id,label:m.label,per_image:m.per_image,available:statuses.gemini.ids.some(x=>x===id||x.startsWith(id+"-"))}));
+ return {choices,providers:statuses,selected:{worker:workerModel(env),supervisor:reviewModel(env)},scope:"all_workspaces",image_models,media:await mediaSettings(env)};
 }
 export async function saveModels(env:Env,input:any){
  if(!input||![input.worker,input.supervisor].every(id=>typeof id==="string"&&Object.hasOwn(MODEL_RATES,id)))throw new HttpError(400,"지원되는 모델을 선택하세요.");

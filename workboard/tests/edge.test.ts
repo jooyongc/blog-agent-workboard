@@ -12,7 +12,7 @@ import {ProviderWait} from "../server/model";
 import {researchSearchQueries,topicSourceFilter,assertTopicEvidence} from "../server/strategy";
 import {applyModelSettings,saveModels} from "../server/model-settings";
 import {importLicensedMedia} from "../server/media-import";
-import {generatedPhoto,reviewPhoto,imageCost,assertReviewedPhotos,NoImageReturned} from "../server/generated-media";
+import {generatedPhoto,reviewPhoto,imageCost,assertReviewedPhotos,NoImageReturned,imageModelFor} from "../server/generated-media";
 import { test } from "node:test";
 import { parseGemini } from "../server/gemini";
 import { workerModel, reviewModel, editorModel } from "../server/model";
@@ -26,6 +26,9 @@ import { renderMarkdown, draftPayload, validateDraft } from "../server/content";
 import { CATALOG, getWorkspace } from "../shared/catalog";
 import type { Env } from "../server/env";
 import type { DraftInput } from "../shared/types";
+import { DEFAULT_MEDIA_SETTINGS, type MediaSettings } from "../shared/media-policy";
+import { mediaSettings, saveMediaSettings, normalizeMediaSettings } from "../server/media-settings";
+import { commonsCandidate } from "../server/commons";
 import { articleUrl, workspace } from "../server/registry";
 import { quality, extractFaq, schema } from "../server/seo";
 import { googleCredentials } from "../server/oauth";
@@ -87,6 +90,7 @@ function db() {
     "0013_media_wait.sql",
     "0014_media_imports.sql",
     "0015_model_settings.sql",
+    "0016_media_settings.sql",
   ])
     d.exec(
       fs.readFileSync(
@@ -95,6 +99,8 @@ function db() {
       ),
     );
   d.exec("UPDATE workspace_budget_settings SET monthly=10,weekly=2,article=0.5,revision=1 WHERE site_id<>'workboard-diagnostic'");
+  // Earlier tests describe the generate-only pipeline; Claude-first defaults are covered by their own tests.
+  d.exec(`INSERT INTO media_settings(id,sources,art_direction,image_model,corrective_image_model,updated_at) VALUES(1,'["generate"]',0,'gemini-3.1-flash-image','gemini-3.1-flash-image','now')`);
   return {
     sqlite: d,
     binding: {
@@ -121,6 +127,7 @@ function db() {
     } as unknown as D1Database,
   };
 }
+const LEGACY_MEDIA: MediaSettings = { sources: ["generate"], art_direction: false, image_model: "gemini-3.1-flash-image", corrective_image_model: "gemini-3.1-flash-image" };
 function environment() {
   const d = db();
   const env: Env = {
@@ -129,6 +136,7 @@ function environment() {
     DASHBOARD_SESSION_SECRET: "test-session-secret-at-least-32-chars",
     AI_ENABLED: "true",
     NATIVE_BLOG_SUPABASE_URL: "https://agkkvtfwqmzgbrqhvohs.supabase.co",
+    MEDIA_SETTINGS: LEGACY_MEDIA,
   };
   return { d, env };
 }
@@ -2419,5 +2427,129 @@ test("released replacement hold never lets operator-excluded images continue to 
  try{
   const result=await advanceHarness(env) as any;assert.equal(result.media_wait,true);assert.equal(calls,1);
   const row=d.sqlite.prepare("SELECT stage,status FROM agent_workflows WHERE job_id='excluded-hold'").get() as any;assert.equal(row.stage,"photo_editor");assert.equal(row.status,"media_wait");
+ }finally{globalThis.fetch=before;}
+});
+
+const PNG=new Uint8Array([137,80,78,71,13,10,26,10]);
+function commonsPage(pageid:number,extra:Record<string,any>={}){
+ return {pageid,title:`File:Nogari alley ${pageid}.jpg`,index:pageid,imageinfo:[{descriptionurl:`https://commons.wikimedia.org/wiki/File:Nogari_alley_${pageid}.jpg`,thumburl:`https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/N${pageid}.jpg/1280px-N${pageid}.jpg`,width:4000,height:3000,mime:"image/jpeg",extmetadata:{License:{value:"cc-by-sa-4.0"},LicenseShortName:{value:"CC BY-SA 4.0"},LicenseUrl:{value:"https://creativecommons.org/licenses/by-sa/4.0"},Artist:{value:"<a href='https://commons.wikimedia.org/wiki/User:Kim'>Kim</a>"},Categories:{value:"Euljiro|Seoul"},ImageDescription:{value:"Dried pollack and beer in an alley in Seoul"},...extra}}]};
+}
+/** Claude plans and reviews, Commons answers, Supabase stores; counts every paid call by kind. */
+function claudeFirstFetch(pages:any[],calls:{plan:number;review:number;image:number;commons:number}){
+ return async(url:any,init?:RequestInit)=>{
+  const u=String(url);
+  if(u.startsWith("https://api.anthropic.com/")){const body=JSON.parse(String(init?.body));
+   if(body.system.startsWith("You are the photo editor")){calls.plan++;return Response.json({stop_reason:"end_turn",content:[{type:"text",text:JSON.stringify({scene:"A low plastic table in a narrow Seoul alley at night with a plate of dried pollack, a small dish of gochujang mayonnaise and two glasses of draft beer, shot at table height with a 35mm lens; warm bulbs blur into soft bokeh.",exclude:["signboards","menus"],search_queries:["Euljiro nogari alley"]})}],usage:{input_tokens:900,output_tokens:200}});}
+   calls.review++;return Response.json({stop_reason:"end_turn",content:[{type:"text",text:JSON.stringify({approved:true,reason:"섹션 주제와 맞는 실제 사진"})}],usage:{input_tokens:1500,output_tokens:60}});}
+  if(u.startsWith("https://commons.wikimedia.org/w/api.php")){calls.commons++;return Response.json({query:{pages}});}
+  if(u.includes("generativelanguage.googleapis.com")){calls.image++;throw Error("no image generation expected");}
+  if(init?.method==="HEAD")return new Response(null,{status:404});
+  if(init?.method==="POST")return new Response("",{status:200});
+  return new Response(PNG,{headers:{"Content-Type":"image/jpeg"}});
+ };
+}
+function claudeEnv(env:Env){Object.assign(env,{AI_PROVIDER:"anthropic",ANTHROPIC_API_KEY:"test",AI_WORKER_MODEL:"claude-sonnet-5-5",AI_REVIEW_MODEL:"claude-opus-5-5",NATIVE_BLOG_SUPABASE_KEY:"test",MEDIA_SETTINGS:DEFAULT_MEDIA_SETTINGS});return env;}
+
+test("Claude-first media defaults search real photos before generation and use Nano Banana 2.1, then Pro for corrections",()=>{
+ assert.deepEqual(DEFAULT_MEDIA_SETTINGS.sources,["commons","generate"]);assert.equal(DEFAULT_MEDIA_SETTINGS.art_direction,true);
+ const env={} as Env;assert.equal(imageModelFor(env,3),"gemini-nano-banana-2.1");assert.equal(imageModelFor(env,4),"gemini-3-pro-image");assert.equal(imageModelFor(env,5),"gemini-3-pro-image");
+ const usage={promptTokenCount:1000,candidatesTokensDetails:[{modality:"IMAGE",tokenCount:1120}]};
+ assert.ok(Math.abs(imageCost(usage,true,"gemini-nano-banana-2.1")-0.0351)<1e-9);assert.ok(Math.abs(imageCost(usage,true,"gemini-3-pro-image")-0.1364)<1e-9);
+ assert.ok(Math.abs(imageCost(usage,true)-0.0677)<1e-9);
+});
+
+test("only attributable, freely licensed, landscape Korean Commons photographs become candidates",()=>{
+ const korean=(t:string)=>koreanMedia(t);
+ const ok=commonsCandidate(commonsPage(1),korean)!;
+ assert.equal(ok.photo.provider,"Wikimedia Commons");assert.equal(ok.photo.license,"CC BY-SA 4.0");assert.equal(ok.photo.photographer,"Kim");assert.ok(ok.photo.alt.includes("Seoul, South Korea"));assert.ok(ok.source.startsWith("https://upload.wikimedia.org/"));
+ assert.equal(commonsCandidate(commonsPage(2,{License:{value:"cc-by-nc-sa-4.0"}}),korean),null);
+ assert.equal(commonsCandidate(commonsPage(3,{Restrictions:{value:"personality"}}),korean),null);
+ assert.equal(commonsCandidate(commonsPage(4,{Artist:{value:""}}),korean),null);
+ assert.equal(commonsCandidate(commonsPage(5,{Categories:{value:"Tokyo"},ImageDescription:{value:"Izakaya"}}),(t)=>koreanMedia(t.replace(/Nogari alley \d+/,""))),null);
+ const portrait=commonsPage(6);portrait.imageinfo[0].width=2000;portrait.imageinfo[0].height=3000;assert.equal(commonsCandidate(portrait,korean),null);
+ assert.equal(commonsCandidate(commonsPage(7,{License:{value:"pd"},Artist:{value:""}}),korean)!.photo.license,"Public domain");
+});
+
+test("Claude plans each slot, Commons supplies real photos and Claude review approves them without image generation",async()=>{
+ const {env}=environment();claudeEnv(env);const {w,input}=supervisorFixture();w.strategy.required_images=2;
+ const a=input.translations.en;a.images=[];a.content_md=a.content_md.replace(/!\[[^\]]*\]\([^)]+\)\n*(\*[^\n]*\*\n*)?/g,"");
+ const calls={plan:0,review:0,image:0,commons:0};const before=globalThis.fetch;globalThis.fetch=claudeFirstFetch([commonsPage(1001),commonsPage(1002),commonsPage(1003)],calls) as any;
+ try{
+  const result=await illustrate(env,w,"commons-first",{en:a});const en=result.en;
+  assert.deepEqual(en.images!.map(p=>p.id),["commons-1001","commons-1002"]);assert.equal(calls.image,0);assert.equal(calls.plan,2);assert.equal(calls.review,2);
+  assert.ok(en.content_md.includes("/ Wikimedia Commons, [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0)"));
+  assert.ok(en.images!.every(p=>p.url.startsWith("https://agkkvtfwqmzgbrqhvohs.supabase.co/storage/v1/object/public/workboard-media/commons/")));
+  assert.equal(approvedMedia(en),true);assert.equal(quality(en,w,"en").passed,true);
+  // A second run reuses the plan, the candidate list and the reviews: no new paid call.
+  await illustrate(env,w,"commons-first",{en:a});assert.equal(calls.plan,2);assert.equal(calls.review,2);
+ }finally{globalThis.fetch=before;}
+});
+
+test("Claude art direction writes the generated scene once per slot and the default model generates it",async()=>{
+ const {env,d}=environment();claudeEnv(env);Object.assign(env,{GEMINI_IMAGES_ENABLED:"true",GEMINI_API_KEY:"test",NATIVE_BLOG_SUPABASE_URL:"https://test.supabase.co"});
+ const {w,input}=supervisorFixture();env.MEDIA_EDITORIAL_BRIEF=await mediaBrief(input.translations.en,w);
+ const prompts:string[]=[];const models:string[]=[];let plans=0,reviews=0;const before=globalThis.fetch;
+ globalThis.fetch=(async(url:any,init?:RequestInit)=>{const u=String(url);
+  if(u.startsWith("https://api.anthropic.com/")){const body=JSON.parse(String(init?.body));
+   if(body.system.startsWith("You are the photo editor")){plans++;return Response.json({stop_reason:"end_turn",content:[{type:"text",text:JSON.stringify({scene:"A close view of a Seoul subway platform bench at night, polished granite floor and a train's green stripe blurred behind, shot at seat height with a 35mm lens and soft overhead light.",exclude:["route maps","station signs"],search_queries:["Seoul subway platform"]})}],usage:{input_tokens:800,output_tokens:150}});}
+   reviews++;return Response.json({stop_reason:"end_turn",content:[{type:"text",text:JSON.stringify({approved:reviews>1,reason:reviews>1?"승인":"간판 글자"})}],usage:{input_tokens:1500,output_tokens:40}});}
+  if(u.includes(":generateContent")){models.push(u.match(/models\/([^:]+):/)![1]);prompts.push(JSON.parse(String(init?.body)).contents[0].parts[0].text);return Response.json({candidates:[{content:{parts:[{inlineData:{mimeType:"image/png",data:btoa(String.fromCharCode(...PNG))}}]}}],usageMetadata:{promptTokenCount:600,candidatesTokensDetails:[{modality:"IMAGE",tokenCount:1120}]}});}
+  if(init?.method==="POST")return new Response("",{status:200});
+  return new Response(PNG,{headers:{"Content-Type":"image/png"}});}) as any;
+ try{
+  await assert.rejects(()=>generatedPhoto(env,w.site_id,"art-direction",input.translations.en.title,0),PendingMedia);
+  const photo=await generatedPhoto(env,w.site_id,"art-direction",input.translations.en.title,0);
+  assert.equal(plans,1);assert.deepEqual(models,["gemini-nano-banana-2.1","gemini-nano-banana-2.1"]);assert.equal(photo.visual_review?.approved,true);
+  assert.ok(prompts.every(p=>p.includes("ART DIRECTION")&&p.includes("polished granite floor")&&p.includes("route maps")));assert.equal(prompts[0].includes("EDITORIAL BRIEF"),false);
+  const runs=d.sqlite.prepare("SELECT model FROM ai_runs").all() as any[];assert.ok(runs.some(r=>r.model==="claude-sonnet-5-5"));assert.ok(runs.some(r=>r.model==="gemini-nano-banana-2.1"));
+ }finally{globalThis.fetch=before;}
+});
+
+test("an image model this key cannot use leaves a reusable receipt and continues after another model is selected",async()=>{
+ const {env,d}=environment();Object.assign(env,{AI_PROVIDER:"gemini",GEMINI_IMAGES_ENABLED:"true",GEMINI_API_KEY:"test",NATIVE_BLOG_SUPABASE_URL:"https://test.supabase.co",NATIVE_BLOG_SUPABASE_KEY:"test",MEDIA_SETTINGS:{...LEGACY_MEDIA,image_model:"gemini-nano-banana-2.1"}});
+ const before=globalThis.fetch;const used:string[]=[];
+ globalThis.fetch=(async(url:any,init?:RequestInit)=>{const u=String(url);
+  if(u.includes(":generateContent")&&!u.includes("pro-preview")){used.push(u);if(u.includes("nano-banana"))return Response.json({error:{message:"models/gemini-nano-banana-2.1 is not found for API version v1beta"}},{status:404});return Response.json({candidates:[{content:{parts:[{inlineData:{mimeType:"image/png",data:btoa(String.fromCharCode(...PNG))}}]}}],usageMetadata:{promptTokenCount:500,candidatesTokensDetails:[{modality:"IMAGE",tokenCount:1120}]}});}
+  if(u.includes("gemini-3.1-pro-preview:"))return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify({approved:true,reason:"승인"})}]}}],usageMetadata:{promptTokenCount:100,candidatesTokenCount:20}});
+  if(init?.method==="POST")return new Response("",{status:200});
+  return new Response(PNG,{headers:{"Content-Type":"image/png"}});}) as any;
+ try{
+  await assert.rejects(()=>generatedPhoto(env,"koreabylocal","unavailable","Korean greetings",0),/Nano Banana 2\.1을 이 Gemini API 키에서 사용할 수 없습니다/);
+  const receipt=d.sqlite.prepare("SELECT status FROM creative_requests WHERE id='koreabylocal-unavailable-gemini-image-v3-0-0'").get() as any;assert.equal(receipt.status,"retryable");
+  assert.equal((d.sqlite.prepare("SELECT SUM(actual) AS s FROM ai_runs").get() as any).s,0);
+  env.MEDIA_SETTINGS=LEGACY_MEDIA;const photo=await generatedPhoto(env,"koreabylocal","unavailable","Korean greetings",0);
+  assert.equal(photo.id,"koreabylocal-unavailable-gemini-image-v3-0-0");assert.ok(used.at(-1)!.includes("gemini-3.1-flash-image"));
+ }finally{globalThis.fetch=before;}
+});
+
+test("generate-first falls back to Commons when the generation ladder for a slot is spent",async()=>{
+ const {env,d}=environment();claudeEnv(env);Object.assign(env,{GEMINI_IMAGES_ENABLED:"true",GEMINI_API_KEY:"test",MEDIA_SETTINGS:{...DEFAULT_MEDIA_SETTINGS,sources:["generate","commons"]}});
+ const {w,input}=supervisorFixture();w.strategy.required_images=2;const a=input.translations.en;a.images=[];a.content_md=a.content_md.replace(/!\[[^\]]*\]\([^)]+\)\n*(\*[^\n]*\*\n*)?/g,"");
+ const brief=await mediaBrief(a,w);const insert=d.sqlite.prepare("INSERT INTO creative_requests(id,site_id,kind,prompt,status,result_json,created_at,updated_at) VALUES(?,?,?,'old','complete',?,'now','now')");
+ for(const slot of [0,1])for(const variant of [0,1]){const id=imageRequestId(w.site_id,"spent",3,slot,variant,brief);const review={approved:false,reason:"간판 글자",policy:"korea-topic-photographic-v3",brief_key:brief.key,slot};
+  insert.run(id,w.site_id,"image",JSON.stringify({id,provider:"Gemini",url:"https://agkkvtfwqmzgbrqhvohs.supabase.co/storage/v1/object/public/workboard-media/gemini/x.png",alt:"Seoul Korea",visual_review:review}));
+  insert.run(`${w.site_id}-spent-visual-v3-${id}-b${brief.key.slice(0,16)}-s${slot}`,w.site_id,"visual_review",JSON.stringify(review));}
+ const calls={plan:0,review:0,image:0,commons:0};const before=globalThis.fetch;globalThis.fetch=claudeFirstFetch([commonsPage(2001),commonsPage(2002)],calls) as any;
+ try{const result=await illustrate(env,w,"spent",{en:a});assert.deepEqual(result.en.images!.map(p=>p.id),["commons-2001","commons-2002"]);assert.equal(calls.image,0);}finally{globalThis.fetch=before;}
+});
+
+test("media settings default to Claude-first, validate choices and check image models only when generation is on",async()=>{
+ const {env,d}=environment();
+ assert.deepEqual(await mediaSettings(env),LEGACY_MEDIA);
+ d.sqlite.exec("DELETE FROM media_settings");assert.deepEqual(await mediaSettings(env),DEFAULT_MEDIA_SETTINGS);
+ d.sqlite.exec("DROP TABLE media_settings");assert.deepEqual(await mediaSettings(env),DEFAULT_MEDIA_SETTINGS);
+ assert.throws(()=>normalizeMediaSettings({...DEFAULT_MEDIA_SETTINGS,sources:["web"]}),/이미지 수급/);
+ assert.throws(()=>normalizeMediaSettings({...DEFAULT_MEDIA_SETTINGS,image_model:"dall-e"}),/이미지 수급/);
+ const fresh=environment();
+ await assert.rejects(()=>saveMediaSettings(fresh.env,DEFAULT_MEDIA_SETTINGS,null),/Gemini API 연결/);
+ await assert.rejects(()=>saveMediaSettings(fresh.env,DEFAULT_MEDIA_SETTINGS,["gemini-3.1-flash-image"]),/Nano Banana 2\.1/);
+ const commonsOnly={...DEFAULT_MEDIA_SETTINGS,sources:["commons"]};
+ assert.deepEqual(await saveMediaSettings(fresh.env,commonsOnly,null),commonsOnly);assert.deepEqual(await mediaSettings(fresh.env),commonsOnly);
+ const before=globalThis.fetch;globalThis.fetch=(async(url:any)=>String(url).includes("generativelanguage")?Response.json({models:[{name:"models/gemini-nano-banana-2.1",supportedGenerationMethods:["generateContent"]},{name:"models/gemini-3-pro-image",supportedGenerationMethods:["generateContent"]}]}):Response.json({data:[{id:"claude-sonnet-5-5"}]})) as any;
+ try{
+  Object.assign(fresh.env,{GEMINI_API_KEY:"test",ANTHROPIC_API_KEY:"test"});
+  const catalog=await (await request("ai-models",fresh.env)).json() as any;
+  assert.deepEqual(catalog.image_models.filter((m:any)=>m.available).map((m:any)=>m.id),["gemini-nano-banana-2.1","gemini-3-pro-image"]);assert.deepEqual(catalog.media,commonsOnly);
+  const saved=await request("media-settings",fresh.env,{method:"PUT",body:JSON.stringify(DEFAULT_MEDIA_SETTINGS)});assert.equal(saved.status,200);assert.deepEqual(await mediaSettings(fresh.env),DEFAULT_MEDIA_SETTINGS);
  }finally{globalThis.fetch=before;}
 });

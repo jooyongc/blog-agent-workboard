@@ -1,0 +1,1 @@
+CREATE TABLE media_settings(id INTEGER PRIMARY KEY CHECK(id=1),sources TEXT NOT NULL,art_direction INTEGER NOT NULL,image_model TEXT NOT NULL,corrective_image_model TEXT NOT NULL,updated_at TEXT NOT NULL);

@@ -6,20 +6,28 @@ import {
   VISUAL_POLICY,
   generatedImagesReady,
   generatedPhoto,
+  approvedGeneratedPhoto,
   reviewPhoto,
 } from "./generated-media";
+import { slotPlan } from "./art-direction";
+import { COMMONS_REVIEWS_PER_SLOT, commonsCandidates, storeCommonsPhoto } from "./commons";
+import { ImageCandidatesRejected } from "./media-recovery";
+import { DEFAULT_MEDIA_SETTINGS } from "../shared/media-policy";
+import type { MediaBrief } from "./media-brief";
 import { creativeAsset, fireflyReady, PendingMedia } from "./firefly";
 import { HttpError } from "./http";
 import library from "../shared/licensed-media.json";
 export type StockPhoto = {
   id: string;
-  provider: "Pexels" | "Unsplash" | "Adobe Stock" | "Adobe Firefly" | "Gemini";
+  provider: "Pexels" | "Unsplash" | "Adobe Stock" | "Adobe Firefly" | "Gemini" | "Wikimedia Commons";
   url: string;
   page: string;
   photographer: string;
   photographer_url: string;
   alt: string;
   license_url: string;
+  /** License name shown in the credit, e.g. "CC BY-SA 4.0". */
+  license?: string;
   visual_review?: {
     approved: boolean;
     reason: string;
@@ -48,7 +56,7 @@ export function approvedMedia(article: Article) {
     inline.length >= 2 &&
     images.every(
       (p) =>
-        ["Adobe Stock", "Adobe Firefly", "Gemini"].includes(p.provider) &&
+        ["Adobe Stock", "Adobe Firefly", "Gemini", "Wikimedia Commons"].includes(p.provider) &&
         koreanMedia(p.alt) &&
         !!p.license_url &&
         p.visual_review?.approved === true && p.visual_review.policy === VISUAL_POLICY &&
@@ -188,10 +196,43 @@ export function insertStockPhotos(
         )
       ];
     blocks[target] +=
-      `\n\n![${clean(photo.alt)}](${photo.url})\n\n${["Adobe Firefly", "Gemini"].includes(photo.provider) ? `*AI-generated illustration (${photo.provider}). Not documentary evidence.*` : `*Photo: [${clean(photo.photographer)} / ${photo.provider}](${photo.page}). Context illustration.*`}\n\n`;
+      `\n\n![${clean(photo.alt)}](${photo.url})\n\n${["Adobe Firefly", "Gemini"].includes(photo.provider) ? `*AI-generated illustration (${photo.provider}). Not documentary evidence.*` : photo.provider === "Wikimedia Commons" ? `*Photo: [${clean(photo.photographer)}](${photo.page}) / Wikimedia Commons, [${clean(photo.license || "license")}](${photo.license_url}). Context illustration.*` : `*Photo: [${clean(photo.photographer)} / ${photo.provider}](${photo.page}). Context illustration.*`}\n\n`;
   });
   return { ...article, content_md: normalizeMarkdownSpacing(blocks.join("")), images: selected };
 }
+/**
+ * A real, openly licensed photograph for one slot: Claude plans the search
+ * phrases, Wikimedia Commons supplies attributable candidates, and Claude's
+ * pixel review decides. At most COMMONS_REVIEWS_PER_SLOT reviews per slot.
+ */
+async function commonsPhoto(
+  env: Env,
+  w: Workspace,
+  slug: string,
+  title: string,
+  brief: MediaBrief,
+  slot: number,
+  photos: StockPhoto[],
+): Promise<StockPhoto | null> {
+  const plan = await slotPlan(env, w.site_id, slug, brief, slot, 3);
+  const heading = (brief.sections[slot % Math.max(1, brief.sections.length)] || brief.title).replace(/[?？!:]/g, "");
+  const candidates = (
+    await commonsCandidates(env, w.site_id, slug, brief, slot, plan?.search_queries.length ? plan.search_queries : [heading], koreanMedia)
+  ).filter((c) => !env.MEDIA_EXCLUDED_IDS?.includes(c.photo.id) && !photos.some((p) => p.id === c.photo.id));
+  for (const candidate of candidates.slice(0, COMMONS_REVIEWS_PER_SLOT)) {
+    let photo: StockPhoto;
+    try {
+      photo = await storeCommonsPhoto(env, candidate);
+    } catch {
+      continue;
+    }
+    const checked = await reviewPhoto({ ...env, MEDIA_IMAGE_SLOT: slot }, w.site_id, slug, title, photo);
+    if (checked.visual_review?.approved) return checked;
+  }
+  return null;
+}
+/** Wall time one photo-stage request spends before the next slot moves to a new request. */
+export const MEDIA_RUN_MS = 120000;
 export async function illustrate(
   env: Env,
   w: Workspace,
@@ -202,7 +243,7 @@ export async function illustrate(
   for (const article of Object.values(result)) {
     const rejected = (article.images || []).filter(
       (p) =>
-        !["Adobe Stock", "Adobe Firefly", "Gemini"].includes(p.provider) ||
+        !["Adobe Stock", "Adobe Firefly", "Gemini", "Wikimedia Commons"].includes(p.provider) ||
         !koreanMedia(p.alt),
     );
     for (const photo of rejected) {
@@ -230,9 +271,6 @@ export async function illustrate(
   const count = Math.max(2, Math.min(4, w.strategy.required_images));
   const candidates = (await stockPhotos(env, query, 0, w.site_id)).filter(p=>!env.MEDIA_EXCLUDED_IDS?.includes(p.id));
   const photos: StockPhoto[] = [];
-  const prefix=`${w.site_id}-${slug}-gemini-image-`;
-  const saved=await env.WORKBOARD_DB.prepare("SELECT result_json FROM creative_requests WHERE site_id=? AND kind='image' AND status='complete' AND substr(id,1,length(?))=? AND json_extract(result_json,'$.visual_review.approved')=1 AND json_extract(result_json,'$.visual_review.policy')=? ORDER BY created_at").bind(w.site_id,prefix,prefix,VISUAL_POLICY).all<{result_json:string}>();
-  for(const row of saved.results){const photo:StockPhoto=JSON.parse(row.result_json);if(!env.MEDIA_EXCLUDED_IDS?.includes(photo.id) && photo.visual_review?.brief_key===brief.key && koreanMedia(photo.alt)&&!photos.some(p=>p.url===photo.url)&&photos.length<count)photos.push(photo);}
   for (const candidate of candidates) {
     if(photos.length>=count)break;
     const checked = await reviewPhoto(
@@ -249,13 +287,52 @@ export async function illustrate(
       photos.push(checked);
     if (photos.length >= count) break;
   }
+  const sources = (env.MEDIA_SETTINGS ?? DEFAULT_MEDIA_SETTINGS).sources;
+  const started = Date.now();
   for (let i = photos.length; i < count; i++) {
+    // Planning, search and review are all cached, so a long run hands the next slot to a fresh request.
+    if (Date.now() - started > MEDIA_RUN_MS) throw new PendingMedia("사진 자리를 나누어 이어서 준비합니다.");
     if(env.MEDIA_MANUAL_ONLY)throw new HttpError(409,"MEDIA_REVIEW: 사용자 지정 이미지 교체 대기입니다. 글과 검증 기록은 보존하며, 적합한 원본을 등록하면 이어서 검토합니다.");
-    if (generatedImagesReady(env)) {
-      const {fresh,...photo}=await generatedPhoto(env, w.site_id, slug, first.title, i);
-      photos.push(photo);
-      if(fresh && i<count-1) throw new PendingMedia("첫 이미지의 생성·검토를 저장했습니다. 다음 이미지를 이어서 준비합니다.");
-    } else if (fireflyReady(env)) {
+    // An image already approved for this slot is reused before any source is asked again.
+    const kept = generatedImagesReady(env) ? await approvedGeneratedPhoto(env, w.site_id, slug, i) : null;
+    if (kept && !env.MEDIA_EXCLUDED_IDS?.includes(kept.id) && !photos.some((p) => p.url === kept.url)) {
+      photos.push(kept);
+      continue;
+    }
+    let spent: unknown = null, fresh = false, filled = false;
+    for (const source of sources) {
+      if (source === "commons") {
+        const found = await commonsPhoto(env, w, slug, first.title, brief, i, photos);
+        if (found) {
+          photos.push(found);
+          filled = true;
+          break;
+        }
+        continue;
+      }
+      if (!generatedImagesReady(env)) continue;
+      try {
+        const generated = await generatedPhoto(env, w.site_id, slug, first.title, i);
+        const {fresh: made, ...photo} = generated;
+        photos.push(photo);
+        fresh = made;
+        filled = true;
+        break;
+      } catch (e) {
+        // A spent generation ladder can still be covered by a later source; it is reported only if nothing fills the slot.
+        if (e instanceof ImageCandidatesRejected && sources.indexOf("generate") < sources.length - 1) {
+          spent = e;
+          continue;
+        }
+        throw e;
+      }
+    }
+    if (filled) {
+      if (fresh && i < count - 1) throw new PendingMedia("첫 이미지의 생성·검토를 저장했습니다. 다음 이미지를 이어서 준비합니다.");
+      continue;
+    }
+    if (spent) throw spent;
+    if (sources.includes("generate") && !generatedImagesReady(env) && fireflyReady(env)) {
       const asset = await creativeAsset(
         env,
         `${w.site_id}-${slug}-approved-image-${i}`,
@@ -282,7 +359,9 @@ export async function illustrate(
     } else
       throw new HttpError(
         409,
-        "MEDIA_REVIEW: 주제에 맞는 Adobe 원본 등록 또는 자동 이미지 생성 연결이 필요합니다.",
+        sources.includes("generate")
+          ? "MEDIA_REVIEW: 주제에 맞는 Adobe 원본 등록 또는 자동 이미지 생성 연결이 필요합니다."
+          : "MEDIA_REVIEW: Wikimedia Commons에서 주제에 맞는 사진을 찾지 못했습니다. 연결 화면에서 이미지 생성을 켜거나 원본을 등록하세요.",
       );
   }
   // Replace former assets as a unit; avoid silently retaining an unrelated image.

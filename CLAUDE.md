@@ -27,12 +27,14 @@ edited in the Workboard **Workspaces** screen, not in this repo.
 
 - `workboard/server/` — Pages Functions: `router.ts`, `auth.ts`, `strategy.ts`
   (director + researcher), `ai.ts` (writer), `harness.ts` (role pipeline),
-  `automation.ts` (verifier, schedules), `media.ts` (Pexels/Unsplash/Adobe Stock),
+  `automation.ts` (verifier, schedules), `media.ts` (photo slots and sources),
+  `art-direction.ts` (Claude slot plans), `commons.ts` (Wikimedia Commons),
+  `generated-media.ts` (image generation and pixel review), `media-settings.ts`,
   `firefly.ts`, `publication.ts`, `registry.ts`, `seo.ts`, `measurement.ts`,
   `oauth.ts`, `model.ts`, `env.ts`
 - `workboard/src/` — React 19 / Vite UI (`App.tsx`, `management.tsx`)
 - `workboard/shared/` — `catalog.ts`, `seeds.json`, `types.ts` (site catalog source of truth)
-- `workboard/migrations/` — D1 migrations `0001`–`0008`
+- `workboard/migrations/` — D1 migrations `0001`–`0016`
 - `workboard/skills/seo-aeo-geo/` — SEO / AEO / GEO / LLMO / NEO rules and references
 - `workboard/tests/edge.test.ts` — Cloudflare API tests
 - `functions/api/[[path]].ts` — Pages Functions entry
@@ -83,14 +85,20 @@ overwrite an existing slug. An uncertain or partial transfer goes to review;
 never resend blindly. Blogger publishes only after both the EN and JA drafts
 exist. Public publication is a separate, schedule-gated step.
 
-**Media.** Every article carries at least two commercial-use photos with
-photographer credit and license metadata: Pexels and Unsplash via Pages secrets
-(`PEXELS_API_KEY`, `UNSPLASH_ACCESS_KEY`), or licensed Adobe Stock originals
-listed in `workboard/shared/licensed-media.json`. Never use expiring preview
-URLs as publication assets. Adobe Firefly API generation stays inactive until
-the organization has a Firefly Services entitlement; web-generated Adobe media
-is registered through the Workspaces upload form instead. Photos are
-illustrations, never factual evidence.
+**Media.** Every article carries at least two Korean-context images with credit
+and license metadata, each approved by the senior review model looking at the
+actual pixels. After registered Adobe Stock originals, the order is the
+operator's choice (Connections → 이미지 수급 방식, D1 `media_settings`). The
+default is Claude-first: Claude plans each image slot, then a Wikimedia Commons
+search finds real photos (CC0, public domain, CC BY or CC BY-SA only, copied to
+our storage, author and license in the caption), then a Claude-directed
+generated illustration fills the rest. Claude does not generate images:
+generation uses Nano Banana 2.1, and the corrective batch and edits use Nano
+Banana Pro (`workboard/shared/media-policy.ts`). Pexels and Unsplash are not
+used. Never use expiring preview URLs as publication assets. Adobe Firefly API
+generation stays inactive until the organization has a Firefly Services
+entitlement; web-generated Adobe media is registered through the Workspaces
+upload form instead. Photos are illustrations, never factual evidence.
 
 **Scheduling.** Cloudflare is the only scheduler. Approvals wake the scheduler
 Worker's authenticated `/run` route, which enqueues a queue message. The old

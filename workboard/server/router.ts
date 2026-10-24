@@ -1,6 +1,7 @@
 import {controlRoom} from "./control-room";
 import {planOperatorMediaRound,OPERATOR_MEDIA_ROUNDS} from "./media-recovery";
 import {applyModelSettings,modelCatalog,saveModels} from "./model-settings";
+import {saveMediaSettings,mediaSettings} from "./media-settings";
 import type { DraftInput, Workspace } from "../shared/types";
 import type { Context } from "./env";
 import { authenticated, equalSecret, makeSession, sessionCookie } from "./auth";
@@ -133,6 +134,7 @@ export async function onRequest({
     env = await applyModelSettings(env);
     if(route === "ai-models" && method === "GET")return json(await modelCatalog(env));
     if(route === "ai-models" && method === "PUT"){const result=await saveModels(env,await body(request));wakeHarness(env,waitUntil);return json(result);}
+    if(route === "media-settings" && method === "PUT"){const input=await body(request);const catalog=await modelCatalog(env);const result=await saveMediaSettings(env,input,catalog.providers.gemini?.ready?catalog.providers.gemini.ids:null);wakeHarness(env,waitUntil);return json(result);}
     if (route === "media-library/search" && method === "GET") {
       const w = await workspace(env, url.searchParams.get("site_id") || "");
       const query = url.searchParams.get("query") || w.strategy.pillars[0];
@@ -523,6 +525,7 @@ export async function onRequest({
           adobe_stock: true,
           firefly: fireflyReady(env),
           gemini_images: generatedImagesReady(env),
+          settings: await mediaSettings(env),
         },
         media_assets: (
           await env.WORKBOARD_DB.prepare(

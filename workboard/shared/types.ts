@@ -89,13 +89,15 @@ export type Article = {
   images?: {
     id: string;
     provider:
-      "Pexels" | "Unsplash" | "Adobe Stock" | "Adobe Firefly" | "Gemini";
+      "Pexels" | "Unsplash" | "Adobe Stock" | "Adobe Firefly" | "Gemini" | "Wikimedia Commons";
     url: string;
     page: string;
     photographer: string;
     photographer_url: string;
     alt: string;
     license_url: string;
+    /** License name shown in the credit, e.g. "CC BY-SA 4.0". */
+    license?: string;
     visual_review?: {
       approved: boolean;
       reason: string;
