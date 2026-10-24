@@ -25,11 +25,25 @@ export const MODEL_RATES = {
   "gemini-3.8-flash": { input: 0.75, output: 3.75 },
   "gemini-3.1-pro-preview": { input: 2, output: 12 },
 } as const;
+/** Claude models whose adaptive thinking cannot be turned off here; thinking is billed inside max_tokens. */
+const THINKING_MODELS: readonly ModelId[] = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"];
+/** Extra output room per effort level so thinking cannot crowd out the JSON answer the role was sized for. */
+const THINKING_HEADROOM = { low: 2000, medium: 4000, high: 8000 } as const;
+export type Effort = keyof typeof THINKING_HEADROOM;
+/** Effort is always explicit because the 5.5 models default to different levels; Haiku 4.5 rejects the field. */
+export function anthropicEffort(env: Env, model: ModelId): Effort | undefined {
+  if (model === "claude-haiku-4-5") return undefined;
+  const requested = String(env.AI_ANTHROPIC_EFFORT);
+  return Object.hasOwn(THINKING_HEADROOM, requested) ? (requested as Effort) : "medium";
+}
+export function outputCeiling(model: ModelId, maxTokens: number, effort?: Effort) {
+  return effort && THINKING_MODELS.includes(model) ? maxTokens + THINKING_HEADROOM[effort] : maxTokens;
+}
 export function workerModel(env: Env): ModelId {
   if(env.AI_WORKER_MODEL && Object.hasOwn(MODEL_RATES,env.AI_WORKER_MODEL))return env.AI_WORKER_MODEL as ModelId;
   return env.AI_PROVIDER === "gemini"
     ? "gemini-3.1-flash-lite"
-    : "claude-haiku-4-5";
+    : "claude-haiku-5-5";
 }
 export function reviewModel(env: Env): ModelId {
   if(env.AI_REVIEW_MODEL && Object.hasOwn(MODEL_RATES,env.AI_REVIEW_MODEL))return env.AI_REVIEW_MODEL as ModelId;
@@ -63,8 +77,14 @@ export class ProviderWait extends HttpError {
   }
 }
 export class IncompleteResponse extends HttpError {
-  constructor(public reason: string) {
-    super(502, "AI 답변이 완결되지 않았습니다. 출력 복구가 필요합니다.");
+  constructor(public reason: string, category?: string | null) {
+    // A safety refusal is worded as a rejection so a persisted checkpoint never reclassifies it as recoverable.
+    super(
+      502,
+      reason === "refusal"
+        ? `AI 요청이 거절되었습니다 (Claude 안전 정책 검사${category ? ": " + category : ""}). 주제나 지시를 바꿔 다시 시도하세요.`
+        : "AI 답변이 완결되지 않았습니다. 출력 복구가 필요합니다.",
+    );
   }
   /** Truncation or an empty turn can be recovered with a larger output budget; safety blocks cannot. */
   get recoverable() {
@@ -137,6 +157,9 @@ export async function modelJson(
     throw new HttpError(503, "AI 연결이 준비되지 않았습니다.");
   // A bounded automatic recovery of a truncated answer repeats the role with a larger output ceiling.
   maxTokens = boostedTokens(maxTokens, env.AI_OUTPUT_BOOST);
+  const effort = gemini ? undefined : anthropicEffort(env, model);
+  // The reservation covers the same ceiling the request sends, thinking included.
+  maxTokens = outputCeiling(model, maxTokens, effort);
   const id = crypto.randomUUID(),
     now = Date.now(),
     month = new Date(now + 9 * 3600000).toISOString().slice(0, 7),
@@ -207,10 +230,10 @@ export async function modelJson(
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
           },
-          signal: AbortSignal.timeout(120000),
+          signal: AbortSignal.timeout(180000),
           body: JSON.stringify({
             model,
-            ...(["low","medium","high"].includes(String(env.AI_ANTHROPIC_EFFORT)) ? {output_config:{effort:env.AI_ANTHROPIC_EFFORT}} : {}),
+            ...(effort ? { output_config: { effort } } : {}),
             max_tokens: maxTokens,
             system,
             messages: [{ role: "user", content: images?.length ? [{type:"text",text:JSON.stringify(input)},...images.map(image=>({type:"image",source:{type:"base64",media_type:image.mimeType,data:image.data}}))] : JSON.stringify(input) }],
@@ -268,6 +291,7 @@ export async function modelJson(
         }
       : (raw as {
           stop_reason: string;
+          stop_details?: { category?: string | null } | null;
           content: { type: string; text?: string; content?: unknown }[];
           usage: {
             input_tokens: number;
@@ -294,7 +318,10 @@ export async function modelJson(
       .bind(cost, cost, id)
       .run();
     if (d.stop_reason !== "end_turn")
-      throw new IncompleteResponse(d.stop_reason);
+      throw new IncompleteResponse(
+        d.stop_reason,
+        "stop_details" in d ? d.stop_details?.category : undefined,
+      );
     const text = d.content
       .filter((c) => c.type === "text")
       .map((c) => c.text ?? "")

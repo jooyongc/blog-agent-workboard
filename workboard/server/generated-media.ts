@@ -210,9 +210,11 @@ export async function reviewPhoto(
     throw new HttpError(409, "MEDIA_REVIEW: 검토할 이미지 형식을 확인하세요.");
   let data:ArrayBuffer;
   try{data=await response.arrayBuffer();}catch{throw new ProviderWait(503,30);}
-  if (data.byteLength > 12 * 1024 * 1024)
-    throw new HttpError(413, "MEDIA_REVIEW: 검토 이미지가 너무 큽니다. 12MB 이하 원본을 등록하세요.");
   const model = reviewModel(env);
+  // Claude accepts at most 10MB per image after base64 encoding, which is 7.5MB of original bytes.
+  const reviewLimit = model.startsWith("claude-") ? 7_500_000 : 12 * 1024 * 1024;
+  if (data.byteLength > reviewLimit)
+    throw new HttpError(413, `MEDIA_REVIEW: 검토 이미지가 너무 큽니다. ${model.startsWith("claude-") ? "7.5MB" : "12MB"} 이하 원본을 등록하세요.`);
   const audit = await modelJson(
     env,
     `${site}/${slug}`,

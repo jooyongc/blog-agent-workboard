@@ -55,10 +55,15 @@ bindings/secrets or in local `.dev.vars`. `VITE_` variables are public. The
 workspace editor stores variable names, never values. Never print, copy, or
 commit a key.
 
-**Model and budget.** `workboard/server/model.ts` calls `claude-haiku-4-5`
-through the Anthropic SDK. The D1 cost ledger caps AI spend at $0.50 per
-article, $2 per week, and $10 per month. Workers AI images are limited to 100
-assets per month. Do not add retries or fallbacks that spend money silently.
+**Model and budget.** `workboard/server/model.ts` calls the worker and
+supervisor models the operator picks from `MODEL_RATES` (D1
+`ai_model_settings`; Claude defaults are `claude-haiku-5-5` and
+`claude-sonnet-5-5`). Claude 5.5 models always think: requests set
+`output_config.effort` explicitly and add thinking room to `max_tokens`, and the
+reservation covers that same ceiling. The D1 `ai_runs` ledger enforces the
+per-workspace article, weekly, and monthly caps in `workspace_budget_settings`.
+Workers AI images are limited to 100 assets per month. Do not add retries or
+fallbacks that spend money silently.
 
 **Approval-only harness.** Only `topic_ideas` with status `approved` enter
 `agent_workflows`. Never auto-approve generated topics. Stages run in order:

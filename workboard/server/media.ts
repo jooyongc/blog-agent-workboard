@@ -59,13 +59,13 @@ export function approvedMedia(article: Article) {
     inline.every((url) => images.some((p) => p.url === url))
   );
 }
+const folded=(text:string)=>text.normalize("NFD").replace(/\p{M}/gu,"").toLowerCase();
 export async function stockPhotos(
   env: Env,
   query: string,
   count = 2,
   siteId?: string,
 ): Promise<StockPhoto[]> {
-  const folded=(text:string)=>text.normalize("NFD").replace(/\p{M}/gu,"").toLowerCase();
   const search=folded(query);
   const uploaded = siteId
     ? (
@@ -130,6 +130,7 @@ export async function stockPhotos(
   );
 }
 export function licensedVideos(query: string) {
+  const search=folded(query);
   return library.filter(
     (x) =>
       x.type === "video" &&
@@ -217,6 +218,7 @@ export async function illustrate(
   const brief=await mediaBrief(first,w);
   env={...env,MEDIA_EDITORIAL_BRIEF:brief};
   const query = mediaSearchQuery(first);
+  const search=folded(query);
   const count = Math.max(2, Math.min(4, w.strategy.required_images));
   const candidates = (await stockPhotos(env, query, 0, w.site_id)).filter(p=>!env.MEDIA_EXCLUDED_IDS?.includes(p.id));
   const photos: StockPhoto[] = [];

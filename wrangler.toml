@@ -5,7 +5,7 @@ compatibility_date = "2026-10-05"
 [vars]
 NATIVE_BLOG_SUPABASE_URL = "https://agkkvtfwqmzgbrqhvohs.supabase.co"
 AI_ENABLED = "true"
-AI_PROVIDER = "gemini"
+AI_PROVIDER = "anthropic"
 MEDIA_POLICY = "adobe-generated"
 GEMINI_IMAGES_ENABLED = "true"
 PUBLIC_WORKBOARD_URL = "https://blog-agent-workboard.pages.dev"

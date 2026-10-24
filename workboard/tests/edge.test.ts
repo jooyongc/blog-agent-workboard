@@ -1792,6 +1792,67 @@ test("Claude visual review sends real image bytes and records the selected model
   assert.equal((d.sqlite.prepare("SELECT model FROM ai_runs WHERE id=?").get(result.run_id) as any).model,"claude-sonnet-5-5");
  }finally{globalThis.fetch=before;}
 });
+test("Claude 5.5 requests set effort explicitly, never disable thinking and reserve room for it",async()=>{
+ const {env,d}=environment();env.ANTHROPIC_API_KEY="claude-test";
+ const before=globalThis.fetch;const sent:any[]=[];const reserved:number[]=[];
+ globalThis.fetch=async(_url,init)=>{
+  sent.push(JSON.parse(String(init?.body)));
+  reserved.push((d.sqlite.prepare("SELECT reserved FROM ai_runs WHERE status='running'").get() as any).reserved);
+  return Response.json({stop_reason:"end_turn",content:[{type:"thinking",thinking:"",signature:"sig"},{type:"text",text:'{"ok":true}'}],usage:{input_tokens:1000,output_tokens:100}});
+ };
+ try{
+  for(const model of ["claude-opus-5-5","claude-sonnet-5-5","claude-haiku-5-5"] as const){
+   const result=await modelJson(env,"koreabylocal/claude-shape","system",{},1000,undefined,model);
+   const body=sent.at(-1);
+   assert.equal(result.data.ok,true);assert.equal(body.model,model);
+   assert.equal(body.output_config.effort,"medium");assert.equal(body.max_tokens,1000+4000);
+   // Opus 5.5 rejects disabled thinking and budgets; none of the three accept sampling or forced tool choice.
+   for(const field of ["thinking","temperature","top_p","top_k","tool_choice"])assert.equal(field in body,false);
+  }
+  assert.ok(reserved[0]>=5000*20/1000000);
+ }finally{globalThis.fetch=before;}
+});
+test("Haiku 4.5 never receives an effort level, which it rejects",async()=>{
+ const {env}=environment();env.ANTHROPIC_API_KEY="claude-test";env.AI_ANTHROPIC_EFFORT="low";
+ const before=globalThis.fetch;let sent:any;
+ globalThis.fetch=async(_url,init)=>{sent=JSON.parse(String(init?.body));return Response.json({stop_reason:"end_turn",content:[{type:"text",text:'{"ok":true}'}],usage:{input_tokens:10,output_tokens:10}});};
+ try{await modelJson(env,"koreabylocal/haiku-legacy","system",{},1000,undefined,"claude-haiku-4-5");assert.equal(sent.output_config,undefined);assert.equal(sent.max_tokens,1000);}finally{globalThis.fetch=before;}
+});
+test("Claude defaults to Haiku 5.5 for work and prices the 5.5 family from current rates",async()=>{
+ const {env,d}=environment();env.AI_PROVIDER="anthropic";env.ANTHROPIC_API_KEY="claude-test";
+ assert.equal(workerModel(env),"claude-haiku-5-5");assert.equal(reviewModel(env),"claude-sonnet-5-5");
+ const before=globalThis.fetch;let input=1000;
+ globalThis.fetch=async()=>Response.json({stop_reason:"end_turn",content:[{type:"text",text:'{"ok":true}'}],usage:{input_tokens:input,output_tokens:100}});
+ try{
+  const close=(a:number,b:number)=>assert.ok(Math.abs(a-b)<1e-12,`${a} != ${b}`);
+  close((await modelJson(env,"koreadecode/price-opus","system",{},1000,undefined,"claude-opus-5-5")).cost_usd,(1000*4+100*20)/1000000);
+  close((await modelJson(env,"koreadecode/price-sonnet","system",{},1000,undefined,"claude-sonnet-5-5")).cost_usd,(1000*2+100*10)/1000000);
+  close((await modelJson(env,"koreadecode/price-haiku","system",{},1000,undefined,"claude-haiku-5-5")).cost_usd,(1000*0.1+100*0.5)/1000000);
+  input=200000;
+  close((await modelJson(env,"koreadecode/price-haiku-long","system",{},1000,undefined,"claude-haiku-5-5")).cost_usd,(200000*0.5+100*2.5)/1000000);
+  assert.equal((d.sqlite.prepare("SELECT COUNT(*) AS n FROM ai_runs WHERE status='complete' AND actual=reserved").get() as any).n,4);
+ }finally{globalThis.fetch=before;}
+});
+test("a Claude safety refusal is recorded once and stops instead of retrying with more tokens",async()=>{
+ const {env,d}=environment();env.ANTHROPIC_API_KEY="claude-test";
+ const before=globalThis.fetch;
+ globalThis.fetch=async()=>Response.json({stop_reason:"refusal",stop_details:{type:"refusal",category:"cyber",explanation:"declined"},content:[],usage:{input_tokens:100,output_tokens:0}});
+ try{
+  const error=await modelJson(env,"koreabylocal/refusal","system",{},1000,undefined,"claude-opus-5-5").then(()=>null,(e)=>e);
+  assert.match(error.message,/AI 요청이 거절되었습니다 \(Claude 안전 정책 검사: cyber\)/);assert.equal(error.recoverable,false);
+  assert.equal(classifyMessage(error.message,"writer"),"provider");
+  assert.equal((d.sqlite.prepare("SELECT status FROM ai_runs").get() as any).status,"failed");
+ }finally{globalThis.fetch=before;}
+});
+test("Claude image review rejects originals above the 10MB base64 limit before any charge",async()=>{
+ const {env,d}=environment();Object.assign(env,{ANTHROPIC_API_KEY:"claude-test",AI_REVIEW_MODEL:"claude-opus-5-5",NATIVE_BLOG_SUPABASE_URL:"https://test.supabase.co"});
+ const before=globalThis.fetch;let claude=0;
+ globalThis.fetch=async(url)=>{if(String(url).includes("anthropic")){claude++;throw Error("Must not charge");}return new Response(new Uint8Array(7_500_001),{headers:{"Content-Type":"image/jpeg"}});};
+ try{
+  await assert.rejects(()=>reviewPhoto(env,"koreabylocal","big-image","Seoul",{id:"big",provider:"Adobe Stock",url:"https://test.supabase.co/storage/v1/object/public/workboard-media/adobe/big.jpg",page:"https://stock.adobe.com/images/big",photographer:"Author",photographer_url:"https://stock.adobe.com",alt:"Seoul Korea",license_url:"https://stock.adobe.com/license-terms"}),/7\.5MB 이하/);
+  assert.equal(claude,0);assert.equal((d.sqlite.prepare("SELECT COUNT(*) AS n FROM ai_runs").get() as any).n,0);
+ }finally{globalThis.fetch=before;}
+});
 test("media resume starts one new candidate batch while retaining article and billing history",async()=>{
  const {env,d}=environment();
  d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('media-retry','koreadecode','media-retry','Fandom','culture','{}','media_wait','now','now')").run();
@@ -1896,7 +1957,8 @@ test("each role gets its own bounded recovery and the repeat uses a larger outpu
   const state=d.sqlite.prepare("SELECT stage,status,payload_json FROM agent_workflows WHERE job_id='per-role'").get() as any;
   // Before: one shared counter let the supervisor consume the only retry, so the truncated editor stopped the job.
   assert.equal(state.stage,"photo_editor");assert.equal(state.status,"pending");
-  assert.deepEqual(seen,[{role:"supervisor",max:6000},{role:"supervisor",max:12000},{role:"editor",max:7000},{role:"editor",max:14000}]);
+  // Each Claude 5.5 ceiling also carries 4000 tokens of medium-effort thinking room.
+  assert.deepEqual(seen,[{role:"supervisor",max:10000},{role:"supervisor",max:16000},{role:"editor",max:11000},{role:"editor",max:18000}]);
   assert.deepEqual(JSON.parse(state.payload_json).retries,{"supervisor/0":1,"editor/1":1});
   const waits=d.sqlite.prepare("SELECT agent,error FROM agent_steps WHERE status='waiting' ORDER BY started_at").all() as any[];
   assert.equal(waits.length,2);assert.ok(waits.every(w=>w.error.includes(`자동 복구 1/${AUTO_RETRY_LIMIT}`)));
@@ -2092,13 +2154,13 @@ test("a legacy empty-image record is skipped without a paid repeat",async()=>{
 
 test("image recovery preserves photographic quality and a visible transport subject",()=>{const scene=recoveryScene("Seoul subway bus taxi comparison",["택시 문자"]);assert.ok(scene.includes("photographic realism"));assert.ok(scene.includes("actual vehicles"));assert.ok(scene.includes("generic card reader"));assert.equal(scene.includes("Use clean flat shapes"),false);});
 
-test("single-language Claude senior audit uses a bounded output reservation",async()=>{const {env}=environment();env.AI_PROVIDER="anthropic";env.ANTHROPIC_API_KEY="test";const {w,input,research,decision}=supervisorFixture();let maxTokens=0;const before=globalThis.fetch;globalThis.fetch=async(_url,init)=>{maxTokens=JSON.parse(String(init?.body)).max_tokens;return Response.json({stop_reason:"end_turn",content:[{type:"text",text:JSON.stringify(decision)}],usage:{input_tokens:100,output_tokens:100}});};try{const report=await supervise(env,w,{slug:input.slug,input,research});assert.equal(report.action,"approve");assert.equal(maxTokens,6000);}finally{globalThis.fetch=before;}});
+test("single-language Claude senior audit uses a bounded output reservation",async()=>{const {env}=environment();env.AI_PROVIDER="anthropic";env.ANTHROPIC_API_KEY="test";const {w,input,research,decision}=supervisorFixture();let maxTokens=0;const before=globalThis.fetch;globalThis.fetch=async(_url,init)=>{maxTokens=JSON.parse(String(init?.body)).max_tokens;return Response.json({stop_reason:"end_turn",content:[{type:"text",text:JSON.stringify(decision)}],usage:{input_tokens:100,output_tokens:100}});};try{const report=await supervise(env,w,{slug:input.slug,input,research});assert.equal(report.action,"approve");assert.equal(maxTokens,6000+4000);}finally{globalThis.fetch=before;}});
 
 test("lean senior audit preserves verified quote windows and the full original evidence",async()=>{const {env}=environment();env.AI_PROVIDER="anthropic";env.ANTHROPIC_API_KEY="test";const {w,input,research,decision}=supervisorFixture();const original="navigation ".repeat(2000)+research.briefs.en.sources[0].evidence;research.briefs.en.sources[0].evidence=original;let sent:any;const before=globalThis.fetch;globalThis.fetch=async(_url,init)=>{sent=JSON.parse(String(init?.body));return Response.json({stop_reason:"end_turn",content:[{type:"text",text:JSON.stringify(decision)}],usage:{input_tokens:100,output_tokens:100}});};try{const report=await supervise(env,w,{slug:input.slug,input,research,compact_audit:true,supervision:[{...decision,round:1}]});const body=JSON.parse(sent.messages[0].content);const evidence=body.research_evidence.en.sources[0].evidence;assert.equal(report.action,"approve");assert.ok(evidence.includes(decision.claims[0].evidence_quote));assert.ok(evidence.length<2000);assert.equal(research.briefs.en.sources[0].evidence,original);}finally{globalThis.fetch=before;}});
 
 test("operator correction permits one new independent audit only against the prior review id",async()=>{const {env}=environment();env.AI_PROVIDER="anthropic";env.ANTHROPIC_API_KEY="test";const {w,input,research,decision}=supervisorFixture();const payload:any={slug:input.slug,input,research,final_repair_attempted:true,supervisor_rounds:4,supervision:[{...decision,run_id:"prior-reviewed"}],operator_review_revision:{prior_run_id:"different",reason:"User approved completing corrected revision"}};let calls=0;const before=globalThis.fetch;globalThis.fetch=async()=>{calls++;return Response.json({stop_reason:"end_turn",content:[{type:"text",text:JSON.stringify(decision)}],usage:{input_tokens:100,output_tokens:100}});};try{await assert.rejects(()=>supervise(env,w,payload));assert.equal(calls,0);payload.operator_review_revision.prior_run_id="prior-reviewed";const report=await supervise(env,w,payload);assert.equal(report.round,5);assert.equal(report.action,"approve");assert.equal(calls,1);payload.supervisor_rounds=5;await assert.rejects(()=>supervise(env,w,payload));assert.equal(calls,1);}finally{globalThis.fetch=before;}});
 
-test("second operator deletion check remains bounded and uses the same senior model",async()=>{const {env}=environment();env.AI_PROVIDER="anthropic";env.ANTHROPIC_API_KEY="test";const {w,input,research,decision}=supervisorFixture();const payload:any={slug:input.slug,input,research,final_repair_attempted:true,supervisor_rounds:5,supervision:[{...decision,run_id:"last-review"}],operator_review_revision:{prior_run_id:"last-review",sequence:2,reason:"Delete the remaining unsupported wording"}};let sent:any;const before=globalThis.fetch;globalThis.fetch=async(_url,init)=>{sent=JSON.parse(String(init?.body));return Response.json({stop_reason:"end_turn",content:[{type:"text",text:JSON.stringify(decision)}],usage:{input_tokens:100,output_tokens:100}});};try{const report=await supervise(env,w,payload);assert.equal(report.round,6);assert.equal(report.model,"claude-sonnet-5-5");assert.equal(sent.output_config.effort,"low");assert.equal(sent.max_tokens,4000);payload.operator_review_revision.sequence=3;payload.supervisor_rounds=6;await assert.rejects(()=>supervise(env,w,payload));}finally{globalThis.fetch=before;}});
+test("second operator deletion check remains bounded and uses the same senior model",async()=>{const {env}=environment();env.AI_PROVIDER="anthropic";env.ANTHROPIC_API_KEY="test";const {w,input,research,decision}=supervisorFixture();const payload:any={slug:input.slug,input,research,final_repair_attempted:true,supervisor_rounds:5,supervision:[{...decision,run_id:"last-review"}],operator_review_revision:{prior_run_id:"last-review",sequence:2,reason:"Delete the remaining unsupported wording"}};let sent:any;const before=globalThis.fetch;globalThis.fetch=async(_url,init)=>{sent=JSON.parse(String(init?.body));return Response.json({stop_reason:"end_turn",content:[{type:"text",text:JSON.stringify(decision)}],usage:{input_tokens:100,output_tokens:100}});};try{const report=await supervise(env,w,payload);assert.equal(report.round,6);assert.equal(report.model,"claude-sonnet-5-5");assert.equal(sent.output_config.effort,"low");assert.equal(sent.max_tokens,4000+2000);payload.operator_review_revision.sequence=3;payload.supervisor_rounds=6;await assert.rejects(()=>supervise(env,w,payload));}finally{globalThis.fetch=before;}});
 
 
 test("source-grounded completion requires an explicit scope and cannot exceed round seven", async () => {
@@ -2112,7 +2174,7 @@ test("source-grounded completion requires an explicit scope and cannot exceed ro
     payload.operator_review_revision.scope="source-grounded-rebuild";
     const report=await supervise(env,w,payload);
     assert.equal(report.round,7);assert.equal(report.action,"approve");
-    assert.equal(sent.max_tokens,2500);assert.equal(sent.output_config.effort,"low");
+    assert.equal(sent.max_tokens,2500+2000);assert.equal(sent.output_config.effort,"low");
     assert.match(JSON.parse(sent.messages[0].content).today,/^\d{4}-\d{2}-\d{2}$/);
     payload.supervisor_rounds=7;
     await assert.rejects(()=>supervise(env,w,payload));assert.equal(calls,1);
@@ -2204,7 +2266,7 @@ test("small factual corrections use exact patches, keep approved media and still
  const phrase=a.content_md.split("\n").find((line:string)=>line.length>40 && !line.startsWith("#"))!;
  const payload:any={slug:input.slug,input,research,supervision:[{...decision,run_id:"patch-review",action:"edit",target_languages:["en"],claims:[{lang:"en",claim:phrase,status:"unsupported"}]}],supervisor_approval:"old"};
  const before=globalThis.fetch;let max=0;globalThis.fetch=async(_url,init)=>{const body=JSON.parse(String(init?.body));max=body.max_tokens;assert.match(body.system,/exact local text corrections/);return anthropic({replacements:[{find:phrase,replace:phrase+" "}]});};
- try{await editUnderSupervision(env,w,payload);assert.equal(max,3000);assert.deepEqual(payload.input.translations.en.images,a.images);assert.equal(payload.supervisor_approval,undefined);assert.deepEqual(payload.editor_completed["patch-review"],["en"]);}finally{globalThis.fetch=before;}
+ try{await editUnderSupervision(env,w,payload);assert.equal(max,3000+4000);assert.deepEqual(payload.input.translations.en.images,a.images);assert.equal(payload.supervisor_approval,undefined);assert.deepEqual(payload.editor_completed["patch-review"],["en"]);}finally{globalThis.fetch=before;}
  assert.equal(classifyMessage("보완 에이전트의 국소 수정 형식을 확인하지 못했습니다.","editor"),"malformed");
 });
 
