@@ -1,4 +1,5 @@
 import {controlRoom} from "./control-room";
+import {planOperatorMediaRound,OPERATOR_MEDIA_ROUNDS} from "./media-recovery";
 import {applyModelSettings,modelCatalog,saveModels} from "./model-settings";
 import type { DraftInput, Workspace } from "../shared/types";
 import type { Context } from "./env";
@@ -18,7 +19,7 @@ import { propose, research } from "./strategy";
 import { quality } from "./seo";
 import {
   enqueue,
-  jobs,
+  jobSummaries,
   tick,
   verifyGenerated,
   researchEvidence,
@@ -530,18 +531,18 @@ export async function onRequest({
             .bind(id)
             .all<{ result_json: string }>()
         ).results.map((row) => JSON.parse(row.result_json)),
-        jobs: await jobs(env, id),
+        jobs: await jobSummaries(env, id, url.searchParams.get("job")),
         runs: r.results,
         workflows: (
           await env.WORKBOARD_DB.prepare(
-            "SELECT job_id,topic_id,stage,status,error,json_extract(payload_json,'$.final_repair_state') AS final_repair_state,json_extract(payload_json,'$.media_recovery') AS media_recovery_json,json_extract(payload_json,'$.photo_retry_revision') AS photo_retry_revision,json_extract(payload_json,'$.media_excluded_ids') AS media_excluded_ids_json,json_extract(payload_json,'$.media_manual_hold') AS media_manual_hold,json_extract(payload_json,'$.recovery') AS recovery_json,json_extract(payload_json,'$.supervision') AS supervision_json,json_extract(payload_json,'$.supervisor_rounds') AS supervisor_rounds FROM agent_workflows WHERE site_id=? ORDER BY created_at DESC LIMIT 100",
+            "SELECT job_id,topic_id,stage,status,error,json_extract(payload_json,'$.final_repair_state') AS final_repair_state,json_extract(payload_json,'$.media_recovery') AS media_recovery_json,json_extract(payload_json,'$.photo_retry_revision') AS photo_retry_revision,json_extract(payload_json,'$.media_excluded_ids') AS media_excluded_ids_json,json_extract(payload_json,'$.media_manual_hold') AS media_manual_hold,json_extract(payload_json,'$.recovery') AS recovery_json,json_extract(payload_json,'$.media_round') AS media_round,(SELECT json_group_array(json_object('action',json_extract(d.value,'$.action'),'model',json_extract(d.value,'$.model'),'at',json_extract(d.value,'$.at'),'reason',json_extract(d.value,'$.reason'),'instructions',json_extract(d.value,'$.instructions'))) FROM json_each(payload_json,'$.supervision') d) AS supervision_json,json_extract(payload_json,'$.supervisor_rounds') AS supervisor_rounds FROM agent_workflows WHERE site_id=? ORDER BY created_at DESC LIMIT 100",
           )
             .bind(id)
             .all()
         ).results,
         steps: (
           await env.WORKBOARD_DB.prepare(
-            "SELECT s.* FROM agent_steps s JOIN agent_workflows f ON f.job_id=s.job_id WHERE f.site_id=? ORDER BY s.started_at DESC LIMIT 100",
+            "SELECT s.id,s.job_id,s.agent,s.status,s.error,s.started_at,s.finished_at,CASE WHEN json_valid(s.output_json) THEN json_object('model',json_extract(s.output_json,'$.model')) END AS output_json FROM agent_steps s JOIN agent_workflows f ON f.job_id=s.job_id WHERE f.site_id=? ORDER BY s.started_at DESC LIMIT 100",
           )
             .bind(id)
             .all()
@@ -560,8 +561,7 @@ export async function onRequest({
         throw new HttpError(409, "재개할 실패 단계가 없습니다.");
       if(f.status === "media_wait"){
         const payload=JSON.parse(f.payload_json);
-        if(payload.photo_retry_revision)throw new HttpError(409,"새 후보 재시도는 이미 사용했습니다. 주제에 맞는 원본을 등록하세요.");
-        payload.photo_retry_revision=4;
+        if(!planOperatorMediaRound(payload))throw new HttpError(409,`새 이미지 후보 재시도를 ${OPERATOR_MEDIA_ROUNDS}회 모두 사용했습니다. 주제에 맞는 원본을 등록하세요.`);
         await env.WORKBOARD_DB.prepare("UPDATE agent_workflows SET payload_json=? WHERE job_id=? AND site_id=? AND status='media_wait'").bind(JSON.stringify(payload),i.job_id,i.site_id).run();
       }
       if (f.stage === "publisher") {

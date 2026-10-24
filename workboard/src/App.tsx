@@ -1084,7 +1084,7 @@ function Composer() {
       if (job) {
         void api<{
           jobs: { id: string; request_json: string; publish_at: string }[];
-        }>(`automation?site_id=${active.site_id}`)
+        }>(`automation?site_id=${active.site_id}&job=${encodeURIComponent(job)}`)
           .then((r) => {
             const row = r.jobs.find((j) => j.id === job);
             if (!row) throw Error("예약 초안을 찾지 못했습니다.");

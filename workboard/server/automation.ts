@@ -19,6 +19,20 @@ export async function jobs(env: Env, id: string) {
     .all();
   return r.results;
 }
+/**
+ * Queue rows for the dashboard's 6-second poll. Pages Functions run under a
+ * 10ms CPU limit, so article bodies stay in D1: each language carries only its
+ * photos and image direction, and the full draft is returned only for the one
+ * job an editor asks for. The caller has already resolved the workspace.
+ */
+export async function jobSummaries(env: Env, id: string, full?: string | null) {
+  const r = await env.WORKBOARD_DB.prepare(
+    "SELECT id,site_id,slug,title,category,status,error,publish_at,created_at,updated_at,CASE WHEN id=? THEN request_json END AS request_json,CASE WHEN json_valid(article_json) THEN (SELECT json_group_object(a.key,json_object('images',json(coalesce(json_extract(a.value,'$.images'),'[]')),'image_direction',json(json_extract(a.value,'$.image_direction')))) FROM json_each(content_jobs.article_json) a) END AS article_json,quality_json FROM content_jobs WHERE site_id=? ORDER BY created_at DESC LIMIT 100",
+  )
+    .bind(full ?? "", id)
+    .all();
+  return r.results;
+}
 export async function enqueue(
   env: Env,
   input: DraftInput & { publish_at?: string },

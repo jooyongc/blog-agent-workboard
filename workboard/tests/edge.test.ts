@@ -7,7 +7,7 @@ import {expireLeases,classifyMessage,planAutoRetry,AUTO_RETRY_LIMIT} from "../se
 import {boostedTokens} from "../server/model";
 import {convertExhaustedResearch} from "../server/supervisor";
 import {planFinalCorrection} from "../server/supervisor";
-import {ImageCandidatesRejected,planMediaRecovery,recoveryScene,recordMediaResourceWait,planMediaRepair} from "../server/media-recovery";
+import {ImageCandidatesRejected,planMediaRecovery,recoveryScene,recordMediaResourceWait,planMediaRepair,planOperatorMediaRound,imageFraming} from "../server/media-recovery";
 import {ProviderWait} from "../server/model";
 import {researchSearchQueries,topicSourceFilter,assertTopicEvidence} from "../server/strategy";
 import {applyModelSettings,saveModels} from "../server/model-settings";
@@ -39,7 +39,7 @@ import {
   planRepair,
   recoverWorkflows,
 } from "../server/harness";
-import { approvedMedia, koreanMedia, stockPhotos, insertStockPhotos } from "../server/media";
+import { approvedMedia, koreanMedia, stockPhotos, insertStockPhotos, tagMatches } from "../server/media";
 import { creativeAsset, PendingMedia } from "../server/firefly";
 import { verifyGenerated } from "../server/automation";
 import { plainEvidence, reconcileSources } from "../server/strategy";
@@ -1853,12 +1853,18 @@ test("Claude image review rejects originals above the 10MB base64 limit before a
   assert.equal(claude,0);assert.equal((d.sqlite.prepare("SELECT COUNT(*) AS n FROM ai_runs").get() as any).n,0);
  }finally{globalThis.fetch=before;}
 });
-test("media resume starts one new candidate batch while retaining article and billing history",async()=>{
+test("media resume starts one adaptive batch, then at most two fresh operator rounds, retaining article and billing history",async()=>{
  const {env,d}=environment();
  d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('media-retry','koreadecode','media-retry','Fandom','culture','{}','media_wait','now','now')").run();
  d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES('media-retry','topic-retry','koreadecode','photo_editor','media_wait',?,'now','now')").run(JSON.stringify({input:{saved:true},research:{saved:true}}));
  const response=await request("automation/retry",env,{method:"POST",body:JSON.stringify({site_id:"koreadecode",job_id:"media-retry"})});assert.equal(response.status,200);
  const row=d.sqlite.prepare("SELECT status,payload_json FROM agent_workflows WHERE job_id='media-retry'").get() as any;const p=JSON.parse(row.payload_json);assert.equal(row.status,"pending");assert.equal(p.photo_retry_revision,4);assert.equal(p.input.saved,true);assert.equal(p.research.saved,true);
+ for(const round of [1,2]){
+  d.sqlite.prepare("UPDATE agent_workflows SET status='media_wait' WHERE job_id='media-retry'").run();
+  assert.equal((await request("automation/retry",env,{method:"POST",body:JSON.stringify({site_id:"koreadecode",job_id:"media-retry"})})).status,200);
+  const next=JSON.parse((d.sqlite.prepare("SELECT payload_json FROM agent_workflows WHERE job_id='media-retry'").get() as any).payload_json);
+  assert.equal(next.media_round,round);assert.equal(next.photo_retry_revision,undefined);assert.equal(next.media_recovery.state,"operator_round");assert.equal(next.input.saved,true);
+ }
  d.sqlite.prepare("UPDATE agent_workflows SET status='media_wait' WHERE job_id='media-retry'").run();
  assert.equal((await request("automation/retry",env,{method:"POST",body:JSON.stringify({site_id:"koreadecode",job_id:"media-retry"})})).status,409);
 });
@@ -2333,4 +2339,85 @@ test("replacement lookup includes article sections and matches cafe tags despite
  const {env,d}=environment();const {input}=supervisorFixture();const a={...input.translations.en,title:"Evening walk rest stops",primary_keyword:"Seoul evening walk",content_md:"## Where do cafés fit in?\nA warm stop."};
  d.sqlite.prepare(`INSERT INTO reusable_media(id,site_id,provider,kind,title,tags_json,url,source_url,license_reference,created_at) VALUES('context-cafe','koreadecode','Adobe Stock','photo','Seoul cafe in South Korea','["cafe"]','https://example.com/photo.jpg','https://stock.adobe.com/images/1','licensed owner asset','now')`).run();
  const photos=await stockPhotos(env,mediaSearchQuery(a),0,"koreabylocal");assert.ok(photos.some(p=>p.id==="context-cafe"));
+});
+
+test("a manual replacement hold is released by an operator round that keeps excluded images excluded",()=>{
+ const payload:any={input:{saved:true},photo_retry_revision:4,media_manual_hold:true,media_excluded_ids:["old-0","old-1"],media_repairs:{0:{state:"rejected"}}};
+ assert.equal(planOperatorMediaRound(payload,"2026-10-24T00:00:00.000Z"),true);
+ assert.equal(payload.media_manual_hold,undefined);assert.equal(payload.photo_retry_revision,undefined);assert.equal(payload.media_repairs,undefined);
+ assert.equal(payload.media_round,1);assert.deepEqual(payload.media_excluded_ids,["old-0","old-1"]);assert.equal(payload.input.saved,true);
+ const fresh:any={};assert.equal(planOperatorMediaRound(fresh),true);assert.equal(fresh.photo_retry_revision,4);assert.equal(fresh.media_round,undefined);
+});
+
+test("generated candidates in signage-heavy scenes are framed close so no lettering is in shot",()=>{
+ const alley="Seoul food alleys Illustrate this actual article section: Euljiro Nogari Alley at night.";
+ assert.ok(imageFraming(0,0,alley,false).includes("signboards"));assert.equal(imageFraming(0,0,alley,false).includes("Wide editorial overview"),false);
+ assert.equal(imageFraming(0,0,"Korean greetings and bowing",false),"Wide editorial overview.");
+ assert.ok(imageFraming(0,1,"Korean greetings and bowing",false).includes("outside the frame"));
+ assert.ok(imageFraming(1,0,"Korean greetings and bowing",true).includes("Close-up"));
+ const corrected=recoveryScene("Seoul food alleys",["간판에 한글처럼 보이는 글자가 보여 반려합니다."],true);
+ assert.ok(corrected.includes("Recompose closer"));assert.ok(corrected.includes("article brief"));
+ assert.equal(recoveryScene("Korean greetings and bowing",["손가락 왜곡"]).includes("Recompose closer"),false);
+});
+
+test("an operator round generates under new receipts instead of replaying spent rejected ones",async()=>{
+ const {env,d}=environment();Object.assign(env,{AI_ENABLED:"true",AI_PROVIDER:"gemini",GEMINI_IMAGES_ENABLED:"true",GEMINI_API_KEY:"test",NATIVE_BLOG_SUPABASE_URL:"https://test.supabase.co",NATIVE_BLOG_SUPABASE_KEY:"test",MEDIA_ROUND:1});
+ const insert=d.sqlite.prepare("INSERT INTO creative_requests(id,site_id,kind,prompt,status,result_json,created_at,updated_at) VALUES(?,'koreabylocal','image','old','complete',?,'now','now')");
+ for(const variant of [0,1]){const id=imageRequestId("koreabylocal","alley",3,0,variant);insert.run(id,JSON.stringify({id,provider:"Gemini",url:"https://test.supabase.co/storage/v1/object/public/workboard-media/gemini/old.png",alt:"Seoul Korea",visual_review:{approved:false,reason:"간판 글자",policy:"korea-topic-photographic-v3"}}));}
+ assert.equal(imageRequestId("koreabylocal","alley",3,0,0,undefined,1),"koreabylocal-alley-gemini-image-r1-v3-0-0");
+ const pixels=new Uint8Array([137,80,78,71,13,10,26,10]);const old=globalThis.fetch;const prompts:string[]=[];
+ globalThis.fetch=async(url,init)=>{
+  if(String(url).includes("gemini-3.1-flash-image:")){prompts.push(JSON.parse(String(init?.body)).contents[0].parts[0].text);return Response.json({candidates:[{content:{parts:[{inlineData:{mimeType:"image/png",data:btoa(String.fromCharCode(...pixels))}}]}}],usageMetadata:{promptTokenCount:500,candidatesTokensDetails:[{modality:"IMAGE",tokenCount:1120}]}});}
+  if(String(url).includes("gemini-3.1-pro-preview:"))return Response.json({candidates:[{finishReason:"STOP",content:{parts:[{text:JSON.stringify({approved:true,reason:"글자 없는 골목 음식 장면"})}]}}],usageMetadata:{promptTokenCount:100,candidatesTokenCount:20}});
+  if(init?.method==="POST")return new Response("",{status:200});
+  return new Response(pixels,{headers:{"Content-Type":"image/png"}});
+ };
+ try{
+  const photo=await generatedPhoto(env,"koreabylocal","alley","Seoul food alleys at night",0);
+  assert.equal(photo.id,"koreabylocal-alley-gemini-image-r1-v3-0-0");assert.equal(photo.visual_review?.approved,true);assert.equal(prompts.length,1);
+  assert.ok(prompts[0].includes("signboards"));
+ }finally{globalThis.fetch=old;}
+});
+
+test("library tags match whole subject words, not place names or fragments",()=>{
+ assert.equal(tagMatches("seoul neighbourhood restaurants","seoul"),false);
+ assert.equal(tagMatches("korean business etiquette","bus"),false);
+ assert.equal(tagMatches("seafood market guide","food"),false);
+ assert.equal(tagMatches("where do cafes fit in","cafe"),true);
+ assert.equal(tagMatches("seoul buses and taxis","bus"),true);
+ assert.equal(tagMatches("seoul subway guide","seoul subway"),true);
+});
+
+test("the dashboard poll returns photo metadata but not article bodies, and the full draft only on request",async()=>{
+ const {env,d}=environment();const {input,decision}=supervisorFixture();input.translations.en.image_direction={time_of_day:"evening",scenes:["scene"]} as any;
+ d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,article_json,quality_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)").run("poll-a","koreadecode","poll-a","Poll A","Travel",JSON.stringify(input),JSON.stringify(input.translations),JSON.stringify({verification:{passed:false,reason:"r",claims:[]}}),"media_wait","2026-10-01","2026-10-01");
+ d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,article_json,status,created_at,updated_at) VALUES('poll-b','koreadecode','poll-b','Poll B','Travel','{}',NULL,'researching','2026-10-02','2026-10-02')").run();
+ d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES('poll-a','t','koreadecode','photo_editor','media_wait',?,'now','now')").run(JSON.stringify({input,media_round:1,supervision:[{...decision,model:"claude-opus-5-5",at:"2026-10-01T00:00:00Z",claims:[{claim:"x".repeat(5000)}]}]}));
+ d.sqlite.prepare("INSERT INTO agent_steps(id,job_id,agent,status,output_json,started_at) VALUES('s1','poll-a','supervisor','complete',?,'now')").run(JSON.stringify({model:"claude-opus-5-5",quality:{big:"y".repeat(5000)}}));
+ const body=await (await request("automation?site_id=koreadecode",env)).text();const data=JSON.parse(body);
+ assert.equal(body.includes("## Quick Answer"),false);assert.equal(body.includes("xxxxx"),false);assert.equal(body.includes("yyyyy"),false);
+ const a=data.jobs.find((j:any)=>j.id==="poll-a");const article=JSON.parse(a.article_json).en;
+ assert.equal(article.images.length,2);assert.equal(article.images[0].url,input.translations.en.images![0].url);assert.equal(article.image_direction.time_of_day,"evening");assert.equal(a.request_json,null);
+ assert.equal(JSON.parse(a.quality_json).verification.passed,false);assert.equal(data.jobs.find((j:any)=>j.id==="poll-b").article_json,null);
+ const flow=data.workflows.find((f:any)=>f.job_id==="poll-a");assert.equal(flow.media_round,1);
+ const [decisionRow]=JSON.parse(flow.supervision_json);assert.equal(decisionRow.action,"approve");assert.equal(decisionRow.model,"claude-opus-5-5");assert.equal(decisionRow.reason,decision.reason);
+ assert.equal(JSON.parse(data.steps[0].output_json).model,"claude-opus-5-5");
+ const full=await (await request("automation?site_id=koreadecode&job=poll-a",env)).json() as any;
+ assert.equal(JSON.parse(full.jobs.find((j:any)=>j.id==="poll-a").request_json).slug,input.slug);assert.equal(full.jobs.find((j:any)=>j.id==="poll-b").request_json,null);
+});
+
+test("released replacement hold never lets operator-excluded images continue to review",async()=>{
+ const {env,d}=environment();Object.assign(env,{AI_PROVIDER:"gemini",GEMINI_API_KEY:"test",GEMINI_IMAGES_ENABLED:"true",NATIVE_BLOG_SUPABASE_KEY:"test",MEDIA_POLICY:"adobe-generated"});
+ const {w,input}=supervisorFixture();const review={approved:true,reason:"ok",model:"gemini-3.1-pro-preview",run_id:"r",sha256:"a".repeat(64),policy:"korea-topic-photographic-v3"};
+ const excluded=[0,1].map(i=>({id:`old-${i}`,provider:"Gemini" as const,url:`https://agkkvtfwqmzgbrqhvohs.supabase.co/storage/v1/object/public/workboard-media/gemini/old-${i}.png`,page:"https://ai.google.dev",photographer:"Gemini AI",photographer_url:"https://ai.google.dev",alt:"Seoul old alley portrait",license_url:"https://ai.google.dev/gemini-api/terms",visual_review:review}));
+ const a=input.translations.en;a.images=[];a.content_md=a.content_md.replace(/!\[[^\]]*\]\([^)]+\)\n*(\*[^\n]*\*\n*)?/g,"");input.translations.en=insertStockPhotos(a,excluded);
+ assert.equal(approvedMedia(input.translations.en),true);
+ const payload:any={slug:"excluded-hold",title:a.title,input,media_round:1,media_excluded_ids:excluded.map(p=>p.id)};
+ d.sqlite.prepare("INSERT INTO content_jobs(id,site_id,slug,title,category,request_json,status,created_at,updated_at) VALUES('excluded-hold',?,?,?,'Travel',?,'agent_pending','now','now')").run(w.site_id,payload.slug,a.title,JSON.stringify(input));
+ d.sqlite.prepare("INSERT INTO agent_workflows(job_id,topic_id,site_id,stage,status,payload_json,created_at,updated_at) VALUES('excluded-hold','t',?,'photo_editor','pending',?,'now','now')").run(w.site_id,JSON.stringify(payload));
+ const before=globalThis.fetch;let calls=0;globalThis.fetch=async()=>{calls++;throw Error("paid request outcome unknown");};
+ try{
+  const result=await advanceHarness(env) as any;assert.equal(result.media_wait,true);assert.equal(calls,1);
+  const row=d.sqlite.prepare("SELECT stage,status FROM agent_workflows WHERE job_id='excluded-hold'").get() as any;assert.equal(row.stage,"photo_editor");assert.equal(row.status,"media_wait");
+ }finally{globalThis.fetch=before;}
 });

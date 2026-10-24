@@ -589,7 +589,11 @@ export async function advanceHarness(env: Env) {
       if (
         payload.input &&
         Object.values(payload.input.translations).some(
-          (article: any) => !approvedMedia(article),
+          (article: any) =>
+            !approvedMedia(article) ||
+            (article.images || []).some((p: any) =>
+              payload.media_excluded_ids?.includes(p.id),
+            ),
         )
       ) {
         delete payload.supervisor_approval;
@@ -628,7 +632,7 @@ export async function advanceHarness(env: Env) {
   env = await applyModelSettings(env);
   const payload = JSON.parse(task.payload_json),
     w = await workspace(env, task.site_id);
-  env = {...env, MEDIA_GENERATION_REVISION: payload.photo_retry_revision || 3, MEDIA_RECOVERY_REASONS:payload.media_recovery?.reasons || [], MEDIA_REPAIR:payload.media_repair, MEDIA_MANUAL_ONLY:payload.media_manual_hold, MEDIA_EXCLUDED_IDS:payload.media_excluded_ids, AI_OUTPUT_BOOST: outputBoost(payload, task.stage)};
+  env = {...env, MEDIA_GENERATION_REVISION: payload.photo_retry_revision || 3, MEDIA_RECOVERY_REASONS:payload.media_recovery?.reasons || [], MEDIA_REPAIR:payload.media_repair, MEDIA_ROUND:payload.media_round, MEDIA_MANUAL_ONLY:payload.media_manual_hold, MEDIA_EXCLUDED_IDS:payload.media_excluded_ids, AI_OUTPUT_BOOST: outputBoost(payload, task.stage)};
   await env.WORKBOARD_DB.prepare(
     "UPDATE content_jobs SET status=?,error=NULL,updated_at=? WHERE id=?",
   )
@@ -683,6 +687,10 @@ export async function advanceHarness(env: Env) {
         w.languages.some(
           (l) =>
             payload.media_manual_hold ||
+            // An image the operator excluded still passes approvedMedia, so it must force a replacement.
+            (payload.input.translations[l].images || []).some((p: any) =>
+              payload.media_excluded_ids?.includes(p.id),
+            ) ||
             (env.MEDIA_POLICY === "adobe-generated" &&
               !approvedMedia(payload.input.translations[l])) ||
             (payload.input.translations[l].images?.length || 0) <

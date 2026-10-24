@@ -22,6 +22,7 @@ export type Env = {
   MEDIA_EDITORIAL_BRIEF?: import("./media-brief").MediaBrief;
   MEDIA_IMAGE_SLOT?:number;
   MEDIA_REPAIR?: {slot:number; reasons:string[]};
+  MEDIA_ROUND?: number;
   AI_OUTPUT_BOOST?: number;
   AI_PROVIDER?: string;
   AI_ENABLED?: string;

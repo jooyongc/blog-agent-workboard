@@ -60,6 +60,14 @@ export function approvedMedia(article: Article) {
   );
 }
 const folded=(text:string)=>text.normalize("NFD").replace(/\p{M}/gu,"").toLowerCase();
+/** A place name alone matches every article on these sites; a library photo needs a subject tag. */
+const PLACE_ONLY_TAGS=new Set(["seoul","korea","south korea","korean"]);
+/** Whole-word tag match (plurals allowed), so "bus" does not match "business" nor "food" "seafood". */
+export function tagMatches(search:string,tag:string){
+  const t=folded(tag).trim();
+  if(!t || PLACE_ONLY_TAGS.has(t))return false;
+  return new RegExp(`(?<![\\p{L}\\p{N}])${t.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}(?:e?s)?(?![\\p{L}\\p{N}])`,"u").test(search);
+}
 export async function stockPhotos(
   env: Env,
   query: string,
@@ -89,7 +97,7 @@ export async function stockPhotos(
         )
         .filter((x) =>
           JSON.parse(x.tags_json).some((tag: string) =>
-            search.includes(folded(tag)),
+            tagMatches(search,tag),
           ),
         )
         .map((x) => ({
@@ -109,7 +117,7 @@ export async function stockPhotos(
         x.type === "photo" &&
         ["purchased", "just_purchased"].includes(x.license_state) &&
         koreanMedia(x.alt) &&
-        x.tags.some((tag) => search.includes(folded(tag))),
+        x.tags.some((tag) => tagMatches(search,tag)),
     )
     .map((x) => ({
       id: x.id,
@@ -134,7 +142,7 @@ export function licensedVideos(query: string) {
   return library.filter(
     (x) =>
       x.type === "video" &&
-      x.tags.some((tag) => search.includes(folded(tag))),
+      x.tags.some((tag) => tagMatches(search,tag)),
   );
 }
 export function insertStockPhotos(
@@ -317,7 +325,7 @@ export async function illustrate(
   ).results
     .filter((x) =>
       JSON.parse(x.tags_json).some((tag: string) =>
-        search.includes(folded(tag)),
+        tagMatches(search,tag),
       ),
     )
     .map((x) => ({

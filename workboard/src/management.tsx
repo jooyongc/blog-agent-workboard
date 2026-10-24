@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { VISUAL_POLICY } from "../shared/media-policy";
+import { VISUAL_POLICY, OPERATOR_MEDIA_ROUNDS } from "../shared/media-policy";
 import { modelLabel } from "../shared/model-label";
 import { api } from "./api";
 import type { Workspace } from "../shared/types";
@@ -1513,8 +1513,8 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                   {data?.workflows?.some((f:any)=>f.job_id===j.id&&f.media_recovery_json&&["retrying","repairing"].includes(JSON.parse(f.media_recovery_json).state)) && <p role="status">이미지 자동 복구 중: 등록된 라이선스 자료를 다시 찾고, 필요하면 반려 원본의 문제 부분을 편집해 재검토합니다. 승인된 이미지는 유지합니다.</p>}
                   {j.status === "media_wait" && (
                     <p>
-                      {workflow?.media_manual_hold ? "사용자가 지정한 이미지 교체 대기입니다. 현재 사진을 자동으로 재생성하지 않습니다. " : ""}
-                      출처 조사·글과 승인된 사진은 저장돼 있습니다. 자동 보완까지 사용한 경우 추가 생성은 멈춥니다. 워크스페이스의 미디어 등록에서 주제에 맞는 라이선스 원본을 추가하면 사진 선정부터 이어집니다. 창을 열어 두거나 글을 다시 작성할 필요가 없습니다.
+                      {workflow?.media_manual_hold ? "사용자가 지정한 이미지 교체 대기입니다. 아래 버튼을 누르면 제외한 사진은 다시 쓰지 않고 본문 기준으로 새 이미지를 생성합니다. " : ""}
+                      출처 조사·글과 승인된 사진은 저장돼 있습니다. 자동 후보를 모두 사용하면 추가 생성은 멈추고, 새 후보 재시도(비용 발생)는 {OPERATOR_MEDIA_ROUNDS}회까지 가능합니다. 워크스페이스의 미디어 등록에서 주제에 맞는 라이선스 원본을 추가해도 사진 선정부터 이어집니다. 창을 열어 두거나 글을 다시 작성할 필요가 없습니다.
                       <Link className="button-secondary" to="/workspaces#media-library">부족한 이미지 원본 등록</Link>
                     </p>
                   )}
@@ -1553,7 +1553,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                     (f: any) =>
                       f.job_id === j.id &&
                       ["failed", "interrupted", "media_wait"].includes(f.status),
-                  ) && !(j.status === "media_wait" && workflow?.photo_retry_revision) && (
+                  ) && !(j.status === "media_wait" && (workflow?.photo_retry_revision || workflow?.media_manual_hold) && (workflow?.media_round || 0) >= OPERATOR_MEDIA_ROUNDS) && (
                     <button
                       className="button-secondary"
                       onClick={() =>
@@ -1571,7 +1571,7 @@ export function AutomationFlow({ active }: Pick<Props, "active">) {
                           .catch((e) => setError(e.message))
                       }
                     >
-                      {j.status === "media_wait" ? "새 이미지 후보로 재개 · 비용 발생" : "중단 단계부터 재개"}
+                      {j.status === "media_wait" ? workflow?.media_manual_hold ? "자동 생성 이미지로 교체 · 비용 발생" : `새 이미지 후보로 재개 · 비용 발생${workflow?.photo_retry_revision ? ` (${(workflow?.media_round || 0) + 1}/${OPERATOR_MEDIA_ROUNDS})` : ""}` : "중단 단계부터 재개"}
                     </button>
                   )}
                   {j.status === "drafted" && (
